@@ -12,6 +12,7 @@
     "typecheck": "npm run typecheck -ws"
   },
   "devDependencies": {
+    "esbuild": "^0.28.0",
     "typescript": "^5.9.3"
   }
 }
