@@ -1,7 +1,11 @@
 import { promises as fs } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { EventEmitter } from "node:events";
 import type { Soul, Thought, Observation, Relationship } from "@wiw/shared";
 import { DEFAULT_SOUL, DEFAULT_THOUGHT } from "@wiw/shared";
+
+export const soulBus = new EventEmitter();
+soulBus.setMaxListeners(100);
 
 const soulsDir   = resolve(process.cwd(), "apps/server/data/souls");
 const thoughtsDir = resolve(process.cwd(), "apps/server/data/thoughts");
@@ -84,6 +88,7 @@ export const appendObservation = async (obs: Observation): Promise<void> => {
   await fs.mkdir(memoriesDir, { recursive: true });
   const path = `${memoriesDir}/${jsonSafe(obs.actorId)}.jsonl`;
   await fs.appendFile(path, `${JSON.stringify(obs)}\n`, "utf-8");
+  soulBus.emit("observation", obs);
 };
 
 export const readObservations = async (actorId: string, limit = 50): Promise<Observation[]> => {

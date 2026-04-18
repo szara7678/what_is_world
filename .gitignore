@@ -15,6 +15,7 @@ apps/server/src/**/*.js
 
 # runtime data (souls/thoughts/memories/events)
 apps/server/data/
+apps/server/apps/
 
 # editor
 .vscode/

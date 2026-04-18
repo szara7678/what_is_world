@@ -10,7 +10,7 @@ import { loadSnapshot, saveSnapshot } from "./persistence/snapshotStore";
 import {
   listSouls, listThoughts, readSoul, writeSoul,
   readThought, writeThought, readObservations, appendObservation,
-  readAllRelationships
+  readAllRelationships, soulBus
 } from "./persistence/soulStore";
 import { WorldRoom } from "./rooms/WorldRoom";
 import { scanAssets } from "./content/scanAssets";
@@ -22,7 +22,8 @@ import {
   publicBrainConfig, MODEL_PRESETS
 } from "./config/brainConfig";
 import { startBrainLoop } from "./brain/loop";
-import type { ActionRequest, NarrativeEvent, RawEvent, Soul, Thought } from "@wiw/shared";
+import { startReflectionLoop } from "./brain/reflect";
+import type { ActionRequest, NarrativeEvent, Observation, RawEvent, Soul, Thought } from "@wiw/shared";
 import { dispatchAction } from "@wiw/world-core";
 
 const port = Number(process.env.PORT ?? 2567);
@@ -90,8 +91,12 @@ fastify.get("/events/tail", async (req, reply) => {
   const onRaw = (e: RawEvent) => {
     reply.raw.write(`event: raw\ndata: ${JSON.stringify(e)}\n\n`);
   };
+  const onObs = (o: Observation) => {
+    reply.raw.write(`event: observation\ndata: ${JSON.stringify(o)}\n\n`);
+  };
   eventBus.on("narrative", onNarrative);
   eventBus.on("raw", onRaw);
+  soulBus.on("observation", onObs);
 
   const heartbeat = setInterval(() => {
     try { reply.raw.write(`: hb\n\n`); } catch {}
@@ -101,6 +106,7 @@ fastify.get("/events/tail", async (req, reply) => {
     clearInterval(heartbeat);
     eventBus.off("narrative", onNarrative);
     eventBus.off("raw", onRaw);
+    soulBus.off("observation", onObs);
   });
   // keep open
   return reply;
@@ -115,7 +121,7 @@ fastify.get("/config/brain", async () => ({
 fastify.post<{ Body: Partial<import("./config/brainConfig").BrainConfig> } >("/config/brain", async (req) => {
   const patch = req.body ?? {};
   const allowed: Array<keyof import("./config/brainConfig").BrainConfig> = [
-    "provider", "apiKey", "model", "baseUrl", "tickIntervalMs", "maxActorsPerTick", "enabled"
+    "provider", "apiKey", "model", "baseUrl", "tickIntervalMs", "maxActorsPerTick", "enabled", "reflectIntervalMs"
   ];
   const sanitized: Partial<import("./config/brainConfig").BrainConfig> = {};
   for (const k of allowed) {
@@ -297,4 +303,5 @@ if (serveUnified) {
 }
 
 startBrainLoop();
-console.log(`brain loop ready (enabled=${getBrainConfig().enabled}, provider=${getBrainConfig().provider})`);
+startReflectionLoop();
+console.log(`brain loop ready (enabled=${getBrainConfig().enabled}, provider=${getBrainConfig().provider}, reflectIntervalMs=${getBrainConfig().reflectIntervalMs})`);

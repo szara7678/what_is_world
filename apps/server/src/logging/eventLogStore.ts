@@ -72,6 +72,9 @@ export const toNarrative = (ev: RawEvent): NarrativeEvent | null => {
   if (ev.category === "world") {
     return mk(ev, "🌿", ev.type, "calm");
   }
+  if (ev.category === "reflection") {
+    return mk(ev, "🪞", `${ev.actorId}: ${ev.type}`, "warm");
+  }
   return null;
 };
 

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Actor, Soul, Thought, WorldState, NarrativeEvent } from "@wiw/shared";
+import type { Actor, Observation, Soul, Thought, WorldState, NarrativeEvent } from "@wiw/shared";
 import { startGame, type GameBridge } from "../game/startGame";
 import { joinWorld } from "../net/room";
 import { API_BASE } from "../net/endpoints";
 import { useEventFeed } from "./useEventFeed";
+import { useObservations } from "./useObservations";
 import { SettingsModal } from "./SettingsModal";
 
 export function ObservatoryShell({ onSwitchMode }: { onSwitchMode: () => void }) {
@@ -57,7 +58,7 @@ export function ObservatoryShell({ onSwitchMode }: { onSwitchMode: () => void })
 
   const actors: Actor[] = world ? Object.values(world.actors) : [];
   const selected = selectedId ? actors.find((a) => a.id === selectedId) : undefined;
-  const todHours = world ? ((world.timeOfDay / 24000) * 24) : 0;
+  const todHours = world ? world.timeOfDay : 0;
 
   const dayPhase = useCallback((h: number) => {
     if (h < 5)  return { icon: "🌙", label: "밤" };
@@ -70,7 +71,7 @@ export function ObservatoryShell({ onSwitchMode }: { onSwitchMode: () => void })
   }, []);
 
   const phase = dayPhase(todHours);
-  const dayN = world ? Math.floor(world.tick / (24000 / 100)) + 1 : 1;
+  const dayN = world ? Math.floor(world.tick / 2400) + 1 : 1;
 
   return (
     <div className="obs-root">
@@ -112,6 +113,7 @@ export function ObservatoryShell({ onSwitchMode }: { onSwitchMode: () => void })
             soul={soul}
             thought={thought}
             onSoulUpdate={(s) => setSoul(s)}
+            selectedId={selectedId}
           />
         )}
       </div>
@@ -182,14 +184,17 @@ function ResidentCard({ actor, selected, onClick }: { actor: Actor; selected: bo
   );
 }
 
-function AgentDetail({ actor, soul, thought, onSoulUpdate }: {
+function AgentDetail({ actor, soul, thought, onSoulUpdate, selectedId }: {
   actor: Actor;
   soul: Soul | null;
   thought: Thought | null;
   onSoulUpdate: (s: Soul) => void;
+  selectedId: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Soul | null>(null);
+  const [tab, setTab] = useState<"now" | "memories">("now");
+  const obs = useObservations(tab === "memories" ? selectedId : null, 60);
 
   const startEdit = () => { if (soul) { setDraft({ ...soul }); setEditing(true); } };
   const saveEdit = async () => {
@@ -210,9 +215,29 @@ function AgentDetail({ actor, soul, thought, onSoulUpdate }: {
         <h4>지금의 영혼</h4>
         <p style={{ fontWeight: 600, fontSize: 15 }}>{actor.name}</p>
         <div className="meta">{actor.kind} · ({actor.x}, {actor.y})</div>
+        <div className="mode-seg" style={{ marginTop: 10 }}>
+          <button className={tab === "now" ? "active" : ""} onClick={() => setTab("now")}>지금</button>
+          <button className={tab === "memories" ? "active" : ""} onClick={() => setTab("memories")}>최근 기억</button>
+        </div>
       </div>
 
-      {soul && !editing && (
+      {tab === "memories" && (
+        <div className="acard">
+          <h4>최근 기억 ({obs.length})</h4>
+          {obs.length === 0 && <div className="empty">아직 기억이 모이지 않았어요.</div>}
+          <ul className="memories">
+            {obs.slice().reverse().map((o) => (
+              <li key={o.id} className={`mem kind-${o.kind}`}>
+                <span className="mem-icon">{memIcon(o.kind)}</span>
+                <span className="mem-text">{o.text}</span>
+                <span className="mem-tick">tick {o.tick}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {tab === "now" && soul && !editing && (
         <div className="acard">
           <h4>이야기 (soul)</h4>
           <p>{soul.backstory}</p>
@@ -228,7 +253,7 @@ function AgentDetail({ actor, soul, thought, onSoulUpdate }: {
         </div>
       )}
 
-      {editing && draft && (
+      {tab === "now" && editing && draft && (
         <div className="acard">
           <h4>영혼 편집</h4>
           <div className="form-row">
@@ -257,7 +282,7 @@ function AgentDetail({ actor, soul, thought, onSoulUpdate }: {
         </div>
       )}
 
-      {thought && (
+      {tab === "now" && thought && (
         <div className="acard">
           <h4>오늘의 생각</h4>
           <p>{thought.priority}</p>
@@ -286,4 +311,15 @@ function AgentDetail({ actor, soul, thought, onSoulUpdate }: {
       </div>
     </>
   );
+}
+
+function memIcon(kind: Observation["kind"]): string {
+  switch (kind) {
+    case "perceive":   return "👁";
+    case "action":     return "🚶";
+    case "dialogue":   return "💬";
+    case "reflection": return "🪞";
+    case "memory":     return "📎";
+    default:           return "·";
+  }
 }

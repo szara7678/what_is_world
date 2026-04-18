@@ -95,7 +95,7 @@ export function buildUserPrompt(args: {
     `의도: ${thought.nextIntent}`,
     `최근 믿음: ${thought.beliefs.slice(-3).join(" / ") || "-"}`,
     ``,
-    `# 지금 (tick ${world.tick}, 시간 ${(world.timeOfDay / 1000).toFixed(1)}시)`,
+    `# 지금 (tick ${world.tick}, 시간 ${world.timeOfDay.toFixed(1)}시)`,
     `내 상태: kind=${me.kind}, 위치=(${me.x},${me.y}), HP=${me.hp}/${me.maxHp}, Stamina=${me.stamina}/${me.maxStamina}, Hunger=${me.hunger}`,
     ``,
     `# 주변 주민`,

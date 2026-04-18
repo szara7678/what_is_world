@@ -8,6 +8,7 @@ interface PublicConfig {
   tickIntervalMs: number;
   maxActorsPerTick: number;
   enabled: boolean;
+  reflectIntervalMs: number;
   hasApiKey: boolean;
   updatedAt: number;
 }
@@ -23,6 +24,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [tickMs, setTickMs] = useState(8000);
   const [maxActors, setMaxActors] = useState(2);
   const [enabled, setEnabled] = useState(false);
+  const [reflectMs, setReflectMs] = useState(45000);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -38,6 +40,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         setTickMs(json.config.tickIntervalMs);
         setMaxActors(json.config.maxActorsPerTick);
         setEnabled(json.config.enabled);
+        setReflectMs(json.config.reflectIntervalMs ?? 45000);
       })
       .catch((e) => setMsg(`로드 실패: ${e}`));
   }, []);
@@ -50,7 +53,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         provider, model, baseUrl,
         tickIntervalMs: tickMs,
         maxActorsPerTick: maxActors,
-        enabled
+        enabled,
+        reflectIntervalMs: reflectMs
       };
       if (apiKey) body.apiKey = apiKey;
       const res = await fetch(`${API_BASE}/config/brain`, {
@@ -122,6 +126,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           <input type="number" min={2000} max={60000} step={500} value={tickMs} onChange={(e) => setTickMs(Number(e.target.value))} style={{ width: 100 }} />
           <label>동시 주민</label>
           <input type="number" min={1} max={10} value={maxActors} onChange={(e) => setMaxActors(Number(e.target.value))} style={{ width: 60 }} />
+        </div>
+
+        <div className="form-row row-horiz">
+          <label>되돌아봄 주기 (ms)</label>
+          <input type="number" min={15000} max={300000} step={5000} value={reflectMs} onChange={(e) => setReflectMs(Number(e.target.value))} style={{ width: 110 }} />
+          <span className="hint">🪞 관찰 3개 이상 쌓이면 요약해 soul의 values/goals 업데이트</span>
         </div>
 
         <div className="form-row row-horiz">

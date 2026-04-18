@@ -299,3 +299,32 @@ html, body, #root {
   text-align: center;
   padding: 40px 12px;
 }
+
+/* Memories list (right panel · '최근 기억' tab) */
+.memories {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.memories .mem {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 6px;
+  align-items: start;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+}
+.memories .mem.kind-reflection { background: #faf1dc; border-color: #e9b44c55; }
+.memories .mem.kind-dialogue   { background: #fdeee5; border-color: #d97a4b55; }
+.memories .mem.kind-perceive   { background: var(--surface); }
+.memories .mem-icon { opacity: 0.8; }
+.memories .mem-text { color: var(--text); line-height: 1.4; word-break: keep-all; }
+.memories .mem-tick { color: var(--text3); font-size: 10px; white-space: nowrap; }

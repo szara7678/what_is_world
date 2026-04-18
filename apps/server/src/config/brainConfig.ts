@@ -13,6 +13,7 @@ export interface BrainConfig {
   tickIntervalMs: number;
   maxActorsPerTick: number;
   enabled: boolean;
+  reflectIntervalMs: number;
   updatedAt: number;
 }
 
@@ -33,6 +34,7 @@ const DEFAULT: BrainConfig = {
   tickIntervalMs: 8000,
   maxActorsPerTick: 2,
   enabled: false,
+  reflectIntervalMs: 45000,
   updatedAt: 0
 };
 
@@ -67,6 +69,7 @@ export const publicBrainConfig = (c: BrainConfig = current) => ({
   tickIntervalMs: c.tickIntervalMs,
   maxActorsPerTick: c.maxActorsPerTick,
   enabled: c.enabled,
+  reflectIntervalMs: c.reflectIntervalMs,
   hasApiKey: Boolean(c.apiKey),
   updatedAt: c.updatedAt
 });

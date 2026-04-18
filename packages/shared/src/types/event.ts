@@ -2,7 +2,7 @@ export type RawEvent = {
   tick: number;
   timestamp: number;
   actorId: string;
-  category: "action" | "edit" | "world" | "brain";
+  category: "action" | "edit" | "world" | "brain" | "reflection";
   type: string;
   result: "success" | "failed" | "info";
   reason?: string;
