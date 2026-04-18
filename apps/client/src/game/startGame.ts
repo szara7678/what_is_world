@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import type { WorldState, Actor, Structure, GroundItem } from "@wiw/shared";
 import { sendMessage } from "../net/room";
+import { API_BASE } from "../net/endpoints";
 
 // ── Public Types ──────────────────────────────────────────────────
 export type GameMode = "STOP" | "PLAY" | "PAUSE";
@@ -31,7 +32,7 @@ export interface GameBridge {
 }
 
 // ── Constants ─────────────────────────────────────────────────────
-const API             = "http://localhost:3001";
+const API             = API_BASE;
 const BASE            = `${API}/static`;
 const TILESET_URL     = `${BASE}/tile/Pipoya%20RPG%20Tileset%2016x16/%5BBase%5DBaseChip_pipo.png`;
 
