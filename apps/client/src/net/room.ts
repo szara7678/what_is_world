@@ -1,7 +1,8 @@
 import { Client, type Room } from "colyseus.js";
 import type { ClientToServerMessage, WorldState } from "@wiw/shared";
+import { WS_URL } from "./endpoints";
 
-const client = new Client("ws://localhost:2567");
+const client = new Client(WS_URL);
 let roomRef: Room<WorldState> | null = null;
 
 export const joinWorld = async (): Promise<Room<WorldState>> => {

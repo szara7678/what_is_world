@@ -818,7 +818,7 @@ export const startGame = (container: HTMLDivElement): GameBridge => {
   const scene = new WorldScene();
   const game  = new Phaser.Game({
     type:            Phaser.CANVAS,
-    backgroundColor: "#0d1117",
+    backgroundColor: "#f3ead9",
     parent:          container,
     scene:           [scene],
     scale: { mode:Phaser.Scale.RESIZE, width:"100%", height:"100%", autoCenter:Phaser.Scale.CENTER_BOTH },

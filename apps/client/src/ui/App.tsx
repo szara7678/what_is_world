@@ -11,10 +11,11 @@ import {
   type SelectedEntity,
 } from "../game/startGame";
 import { joinWorld, sendMessage } from "../net/room";
+import { API_BASE } from "../net/endpoints";
 import "./App.css";
 
 // ── Constants ─────────────────────────────────────────────────────
-const BASE_URL    = "http://localhost:3001";
+const BASE_URL    = API_BASE;
 const TILESET_URL = `${BASE_URL}/static/tile/Pipoya%20RPG%20Tileset%2016x16/%5BBase%5DBaseChip_pipo.png`;
 const TILESET_ROWS = 249;  // 3984 / 16
 

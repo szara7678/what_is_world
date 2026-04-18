@@ -1,1 +1,22 @@
 node_modules
+*.log
+
+# build outputs
+dist/
+**/dist/
+packages/*/dist/
+apps/*/dist/
+
+# compiled TS sibling .js (shouldn't be tracked)
+packages/shared/src/**/*.js
+packages/world-core/src/**/*.js
+apps/client/src/**/*.js
+apps/server/src/**/*.js
+
+# runtime data (souls/thoughts/memories/events)
+apps/server/data/
+
+# editor
+.vscode/
+.idea/
+.DS_Store
