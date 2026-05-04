@@ -1,26 +1,26 @@
 /* ──────────────────────────────────────────
-   World Engine Editor – Dark Theme
+   Mochi Village Editor
    ────────────────────────────────────────── */
 
 *, *::before, *::after { box-sizing: border-box; }
 
 :root {
-  --bg:        #0d1117;
-  --surface:   #161b22;
-  --surface2:  #1c2333;
-  --surface3:  #21262d;
-  --border:    #30363d;
-  --border2:   #3d444d;
-  --accent:    #e94560;
-  --accent2:   #58a6ff;
-  --accent3:   #3fb950;
-  --accent4:   #d29922;
-  --text:      #e6edf3;
-  --text2:     #8b949e;
-  --text3:     #484f58;
-  --play:      #3fb950;
-  --pause:     #d29922;
-  --stop:      #e94560;
+  --bg:        #f4ead8;
+  --surface:   #fff8ec;
+  --surface2:  #f7ead6;
+  --surface3:  #f0dbc0;
+  --border:    #dfc8ad;
+  --border2:   #cda982;
+  --accent:    #c96f45;
+  --accent2:   #b85f38;
+  --accent3:   #5f8b63;
+  --accent4:   #b9822f;
+  --text:      #372a20;
+  --text2:     #725f50;
+  --text3:     #a28b77;
+  --play:      #5f8b63;
+  --pause:     #b9822f;
+  --stop:      #b85f38;
 }
 
 html, body, #root {
@@ -234,7 +234,7 @@ html, body, #root {
   overflow: auto;
   max-height: 320px;
   border-radius: 3px;
-  background: #000;
+  background: #eadbc5;
   scrollbar-width: thin;
   scrollbar-color: var(--border2) transparent;
 }
@@ -250,6 +250,55 @@ html, body, #root {
   color: var(--text2);
   padding: 4px 2px;
   text-align: center;
+}
+
+.mochi-tile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text2);
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.mini-toggle {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--accent2);
+  border-radius: 5px;
+  font-size: 10px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.mochi-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+.mochi-tile {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text2);
+  border-radius: 6px;
+  padding: 5px 3px;
+  cursor: pointer;
+  font: inherit;
+}
+.mochi-tile.active {
+  border-color: var(--accent2);
+  box-shadow: inset 0 0 0 1px var(--accent2);
+  color: var(--accent2);
+}
+.mochi-tile img {
+  display: block;
+  width: 32px;
+  height: 32px;
+  margin: 0 auto 3px;
+  image-rendering: pixelated;
+}
+.mochi-tile span {
+  display: block;
+  font-size: 10px;
 }
 
 /* Asset thumbnail grid */
@@ -305,7 +354,7 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #000;
+  background: var(--surface2);
   position: relative;
 }
 
@@ -462,6 +511,16 @@ html, body, #root {
 .spawn-panel {
   padding: 6px 0;
 }
+.selected-cell-chip {
+  display: inline-flex;
+  margin-bottom: 8px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--accent2);
+  background: #fff4e2;
+  font-size: 10px;
+}
 .spawn-row {
   display: flex;
   align-items: center;
@@ -575,6 +634,10 @@ html, body, #root {
 .console-line.warn  .console-line-msg { color: var(--accent4); }
 .console-line.error .console-line-msg { color: var(--stop); }
 .console-line.success .console-line-msg { color: var(--accent3); }
+.console-line.calm .console-line-msg { color: var(--text2); }
+.console-line.warm .console-line-msg { color: var(--accent2); }
+.console-line.cool .console-line-msg { color: #5c7690; }
+.console-line.danger .console-line-msg { color: var(--stop); }
 
 /* ── Actor Status Panel (PLAY mode left) ── */
 .actors-panel {

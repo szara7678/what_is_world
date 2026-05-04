@@ -15,6 +15,7 @@ export type NarrativeEvent = {
   timestamp: number;
   icon: string;
   text: string;
+  actorName?: string;
   tone: "calm" | "warn" | "danger" | "warm" | "cool";
   actorIds: string[];
   raw?: RawEvent;

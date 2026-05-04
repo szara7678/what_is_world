@@ -1,26 +1,49 @@
 import { promises as fs } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { EventEmitter } from "node:events";
-import type { Soul, Thought, Observation, Relationship } from "@wiw/shared";
-import { DEFAULT_SOUL, DEFAULT_THOUGHT } from "@wiw/shared";
+import type { Soul, SoulRole, Thought, Observation, Relationship } from "@wiw/shared";
+import { DEFAULT_SOUL, DEFAULT_THOUGHT, enrichSoulFromSeed, isDefaultSoulText } from "@wiw/shared";
 
 export const soulBus = new EventEmitter();
 soulBus.setMaxListeners(100);
 
-const soulsDir   = resolve(process.cwd(), "apps/server/data/souls");
-const thoughtsDir = resolve(process.cwd(), "apps/server/data/thoughts");
-const memoriesDir = resolve(process.cwd(), "apps/server/data/memories");
-const relFile    = resolve(process.cwd(), "apps/server/data/relationships.json");
+const soulsDir   = resolve(process.cwd(), "data/souls");
+const thoughtsDir = resolve(process.cwd(), "data/thoughts");
+const memoriesDir = resolve(process.cwd(), "data/memories");
+const relFile    = resolve(process.cwd(), "data/relationships.json");
 
 const jsonSafe = (p: string) => p.replace(/[^\w\-]/g, "_");
+
+const inferRole = (actorId: string, name: string): SoulRole | undefined => {
+  if (actorId === "player-1") return "hero";
+  if (actorId === "npc-1") return "farmer";
+  if (actorId === "npc-2" || name.toLowerCase().includes("baker")) return "baker";
+  if (actorId === "npc-3") return "merchant";
+  if (actorId === "npc-4") return "guard";
+  return undefined;
+};
 
 export const readSoul = async (actorId: string, name: string): Promise<Soul> => {
   const path = `${soulsDir}/${jsonSafe(actorId)}.json`;
   try {
     const raw = await fs.readFile(path, "utf-8");
-    return JSON.parse(raw) as Soul;
+    let soul = JSON.parse(raw) as Soul;
+    const role = soul.role ?? inferRole(actorId, soul.name ?? name);
+    if (role && soul.role !== role) {
+      soul.role = role;
+      await writeSoul(soul);
+    }
+    // one-time migration: default 텍스트로 만들어진 soul → 풍부 페르소나 시드로 갱신
+    if (isDefaultSoulText(soul)) {
+      const enriched = enrichSoulFromSeed(soul);
+      if (enriched !== soul) {
+        soul = enriched;
+        await writeSoul(soul);
+      }
+    }
+    return soul;
   } catch {
-    const fresh = DEFAULT_SOUL(actorId, name);
+    const fresh = DEFAULT_SOUL(actorId, name, inferRole(actorId, name));
     await writeSoul(fresh);
     return fresh;
   }

@@ -11,7 +11,7 @@ export function useEventFeed(limit = 80): NarrativeEvent[] {
       try {
         const res = await fetch(`${API_BASE}/events?limit=${limit}`);
         const json = await res.json() as { narratives: NarrativeEvent[] };
-        if (!cancel) setEvents(json.narratives.slice(-limit));
+        if (!cancel) setEvents(json.narratives.slice(-limit).map(normalizeNarrative));
       } catch {}
     })();
 
@@ -19,7 +19,7 @@ export function useEventFeed(limit = 80): NarrativeEvent[] {
     es.addEventListener("narrative", (e) => {
       try {
         const n = JSON.parse((e as MessageEvent).data) as NarrativeEvent;
-        setEvents((prev) => [...prev.slice(-(limit - 1)), n]);
+        setEvents((prev) => [...prev.slice(-(limit - 1)), normalizeNarrative(n)]);
       } catch {}
     });
     es.onerror = () => { /* browser will retry */ };
@@ -31,4 +31,13 @@ export function useEventFeed(limit = 80): NarrativeEvent[] {
   }, [limit]);
 
   return events;
+}
+
+function normalizeNarrative(n: NarrativeEvent): NarrativeEvent {
+  const actorId = n.raw?.actorId ?? n.actorIds[0];
+  if (!n.actorName || !actorId) return n;
+  return {
+    ...n,
+    text: n.text.replaceAll(actorId, n.actorName)
+  };
 }

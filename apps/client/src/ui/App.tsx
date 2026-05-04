@@ -12,6 +12,7 @@ import {
 } from "../game/startGame";
 import { joinWorld, sendMessage } from "../net/room";
 import { API_BASE } from "../net/endpoints";
+import { useEventFeed } from "./useEventFeed";
 import "./App.css";
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -118,6 +119,14 @@ function TilesetPicker({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imgRef    = useRef<HTMLImageElement | null>(null);
   const [imgLoaded, setImgLoaded] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const mochiTiles = [
+    { label: "잔디", tileId: 1, path: "/static/tile/모찌마을/grass-base.png" },
+    { label: "광장", tileId: 2, path: "/static/tile/모찌마을/plaza-center.png" },
+    { label: "흙길", tileId: 3, path: "/static/tile/모찌마을/road-dirt.png" },
+    { label: "텃밭", tileId: 4, path: "/static/tile/모찌마을/grass-tuft.png" },
+    { label: "가게", tileId: 5, path: "/static/tile/모찌마을/cobble-center.png" }
+  ];
 
   const drawOverlay = useCallback(
     (ctx: CanvasRenderingContext2D, scale: number) => {
@@ -157,24 +166,42 @@ function TilesetPicker({
 
   return (
     <div>
-      <div
-        style={{ position: "relative", cursor: "crosshair", lineHeight: 0 }}
-        onClick={handleClick}
-      >
-        <img
-          ref={imgRef}
-          src={TILESET_URL}
-          alt="tileset"
-          onLoad={() => setImgLoaded(true)}
-          style={{ width: "100%", imageRendering: "pixelated", display: "block", border: "1px solid var(--border)", borderRadius: 3 }}
-        />
-        <canvas
-          ref={canvasRef}
-          width={TILESET_COLS * TILE_SRC}
-          height={TILESET_ROWS * TILE_SRC}
-          style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
-        />
+      <div className="mochi-tile-head">
+        <span>모찌 추천</span>
+        <button className="mini-toggle" onClick={() => setShowAll((v) => !v)}>{showAll ? "접기" : "전체 보기"}</button>
       </div>
+      <div className="mochi-tile-grid">
+        {mochiTiles.map((tile) => (
+          <button
+            key={tile.path}
+            className={`mochi-tile${selectedTile === tile.tileId ? " active" : ""}`}
+            onClick={() => onSelect(tile.tileId)}
+          >
+            <img src={`${BASE_URL}${tile.path}`} alt="" />
+            <span>{tile.label}</span>
+          </button>
+        ))}
+      </div>
+      {showAll && (
+        <div
+          style={{ position: "relative", cursor: "crosshair", lineHeight: 0, marginTop: 8 }}
+          onClick={handleClick}
+        >
+          <img
+            ref={imgRef}
+            src={TILESET_URL}
+            alt="tileset"
+            onLoad={() => setImgLoaded(true)}
+            style={{ width: "100%", imageRendering: "pixelated", display: "block", border: "1px solid var(--border)", borderRadius: 3 }}
+          />
+          <canvas
+            ref={canvasRef}
+            width={TILESET_COLS * TILE_SRC}
+            height={TILESET_ROWS * TILE_SRC}
+            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+          />
+        </div>
+      )}
       <div className="tile-info">
         선택된 타일: #{selectedTile} &nbsp;(col {selectedTile % TILESET_COLS}, row {Math.floor(selectedTile / TILESET_COLS)})
       </div>
@@ -183,11 +210,32 @@ function TilesetPicker({
 }
 
 // ── Inspector: Actor ──────────────────────────────────────────────
+type ActorSoulSnap = {
+  soul?: { name?: string; role?: string; persona?: string; tone?: string; values?: string[]; goals?: string[]; backstory?: string };
+  thought?: { priority?: string; emotion?: string; nextIntent?: string; beliefs?: string[]; recentEvents?: string[] };
+};
+
 function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, { type: "actor" }>; onAction: (msg: string) => void }) {
   const a = entity.data;
   const hpPct = a.maxHp > 0 ? (a.hp / a.maxHp) * 100 : 100;
   const mpPct = a.maxMp > 0 ? (a.mp / a.maxMp) * 100 : 100;
   const stPct = a.maxStamina > 0 ? (a.stamina / a.maxStamina) * 100 : 100;
+  const hgPct = Math.min(100, Math.max(0, a.hunger));
+  const skills = (a.skills ?? []) as Array<{ id: string; name: string; level: number; xp?: number; type?: string; description?: string }>;
+  const status = a.status ?? { strength: 5, dexterity: 5, constitution: 5, intelligence: 5 };
+  const inv = a.inventory ?? [];
+  const SKILL_THRESHOLDS = [0, 10, 30, 80, 200, 500, 1200, 3000, 7000, 15000, 30000];
+  const xpForNext = (lv: number) => SKILL_THRESHOLDS[Math.min(lv + 1, SKILL_THRESHOLDS.length - 1)];
+
+  const [extra, setExtra] = useState<ActorSoulSnap>({});
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${BASE_URL}/agent/${encodeURIComponent(a.id)}/snapshot`)
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) setExtra(d as ActorSoulSnap); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [a.id]);
 
   return (
     <div>
@@ -206,27 +254,19 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
           <span className={`kind-badge ${a.kind}`}>{a.kind}</span>
         </div>
         <div className="inspector-row">
-          <span className="inspector-label">Asset</span>
-          <span className="inspector-value">{a.assetKey ?? "—"}</span>
-        </div>
-      </div>
-
-      <div className="inspector-section">
-        <div className="inspector-section-title">Transform</div>
-        <div className="inspector-row">
           <span className="inspector-label">Position</span>
           <span className="inspector-value">({a.x.toFixed(1)}, {a.y.toFixed(1)})</span>
         </div>
       </div>
 
       <div className="inspector-section">
-        <div className="inspector-section-title">Stats</div>
+        <div className="inspector-section-title">Vitals</div>
         <div className="inspector-row">
           <span className="inspector-label">HP</span>
           <div className="hp-bar-wrap" title={`${a.hp}/${a.maxHp}`}>
             <div className="hp-bar-fill" style={{ width: `${hpPct}%`, background: hpPct > 50 ? "#3fb950" : hpPct > 25 ? "#d29922" : "#e94560" }} />
           </div>
-          <span style={{ fontSize: 10, color: "var(--text2)", minWidth: 44 }}>{a.hp}/{a.maxHp}</span>
+          <span style={{ fontSize: 10, color: "var(--text2)", minWidth: 44 }}>{Math.round(a.hp)}/{a.maxHp}</span>
         </div>
         <div className="inspector-row">
           <span className="inspector-label">MP</span>
@@ -236,15 +276,18 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
           <span style={{ fontSize: 10, color: "var(--text2)", minWidth: 44 }}>{a.mp}/{a.maxMp}</span>
         </div>
         <div className="inspector-row">
-          <span className="inspector-label">Stamina</span>
+          <span className="inspector-label">STM</span>
           <div className="hp-bar-wrap">
             <div className="hp-bar-fill" style={{ width: `${stPct}%`, background: "#d29922" }} />
           </div>
-          <span style={{ fontSize: 10, color: "var(--text2)", minWidth: 44 }}>{a.stamina}/{a.maxStamina}</span>
+          <span style={{ fontSize: 10, color: "var(--text2)", minWidth: 44 }}>{Math.round(a.stamina)}/{a.maxStamina}</span>
         </div>
         <div className="inspector-row">
-          <span className="inspector-label">Hunger</span>
-          <span className="inspector-value">{a.hunger}</span>
+          <span className="inspector-label">HGR</span>
+          <div className="hp-bar-wrap">
+            <div className="hp-bar-fill" style={{ width: `${hgPct}%`, background: hgPct > 80 ? "#e94560" : hgPct > 50 ? "#d29922" : "#3fb950" }} />
+          </div>
+          <span style={{ fontSize: 10, color: "var(--text2)", minWidth: 44 }}>{Math.round(a.hunger)}/100</span>
         </div>
         <div className="inspector-row">
           <span className="inspector-label">Gold</span>
@@ -252,7 +295,88 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
         </div>
       </div>
 
+      <div className="inspector-section">
+        <div className="inspector-section-title">Status</div>
+        <div className="inspector-row"><span className="inspector-label">힘 STR</span><span className="inspector-value">{status.strength}</span></div>
+        <div className="inspector-row"><span className="inspector-label">민첩 DEX</span><span className="inspector-value">{status.dexterity}</span></div>
+        <div className="inspector-row"><span className="inspector-label">체력 CON</span><span className="inspector-value">{status.constitution}</span></div>
+        <div className="inspector-row"><span className="inspector-label">지능 INT</span><span className="inspector-value">{status.intelligence}</span></div>
+      </div>
+
+      <div className="inspector-section">
+        <div className="inspector-section-title">Skills</div>
+        {skills.length === 0 ? (
+          <div style={{ fontSize: 10, color: "var(--text2)" }}>—</div>
+        ) : (
+          skills.map((s) => {
+            const xp = s.xp ?? 0;
+            const next = xpForNext(s.level);
+            const prev = SKILL_THRESHOLDS[s.level] ?? 0;
+            const pct = next > prev ? Math.max(0, Math.min(100, ((xp - prev) / (next - prev)) * 100)) : 0;
+            return (
+              <div key={s.id} className="inspector-row" title={s.description ?? s.id}>
+                <span className="inspector-label">{s.name}</span>
+                <div className="hp-bar-wrap">
+                  <div className="hp-bar-fill" style={{ width: `${pct}%`, background: s.level > 0 ? "#9ed27e" : "#666" }} />
+                </div>
+                <span style={{ fontSize: 10, color: "var(--text2)", minWidth: 64 }}>lv{s.level} {xp}/{next}</span>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <div className="inspector-section">
+        <div className="inspector-section-title">Inventory ({inv.length})</div>
+        {inv.length === 0 ? (
+          <div style={{ fontSize: 10, color: "var(--text2)" }}>비어 있음</div>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {inv.map((slot, i) => {
+              const label = slot.kind === "stack" ? `${slot.item} × ${slot.count}` : slot.item;
+              return (
+                <span key={`${slot.item}-${i}`} style={{ fontSize: 10, padding: "2px 6px", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 4 }}>{label}</span>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {extra.soul && (
+        <div className="inspector-section">
+          <div className="inspector-section-title">Persona</div>
+          {extra.soul.persona && <div style={{ fontSize: 11, color: "var(--text)", marginBottom: 4 }}>{extra.soul.persona}</div>}
+          {extra.soul.tone && <div className="inspector-row"><span className="inspector-label">어조</span><span className="inspector-value">{extra.soul.tone}</span></div>}
+          {extra.soul.values && extra.soul.values.length > 0 && <div className="inspector-row"><span className="inspector-label">가치</span><span className="inspector-value">{extra.soul.values.join(", ")}</span></div>}
+          {extra.soul.goals && extra.soul.goals.length > 0 && <div className="inspector-row"><span className="inspector-label">목표</span><span className="inspector-value">{extra.soul.goals.join(", ")}</span></div>}
+        </div>
+      )}
+
+      {extra.thought && (extra.thought.priority || extra.thought.emotion) && (
+        <div className="inspector-section">
+          <div className="inspector-section-title">Thought</div>
+          {extra.thought.priority && <div style={{ fontSize: 11, marginBottom: 4 }}>{extra.thought.priority}</div>}
+          {extra.thought.emotion && <div className="inspector-row"><span className="inspector-label">감정</span><span className="inspector-value">{extra.thought.emotion}</span></div>}
+          {extra.thought.nextIntent && <div className="inspector-row"><span className="inspector-label">다음</span><span className="inspector-value">{extra.thought.nextIntent}</span></div>}
+          {extra.thought.recentEvents && extra.thought.recentEvents.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <div style={{ fontSize: 10, color: "var(--text2)", marginBottom: 2 }}>최근 기억 (위 = 새 것, 아래 = 오래됨)</div>
+              {extra.thought.recentEvents.slice(-8).reverse().map((e, i) => (
+                <div key={i} style={{ fontSize: 10, color: "var(--text)", padding: "1px 0", lineHeight: 1.4 }}>· {e}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="inspector-action-row">
+        <button
+          className="inspector-btn"
+          onClick={() => {
+            const w = (window as unknown as { __wiwBridge?: { focusActor?: (id: string) => void } });
+            w.__wiwBridge?.focusActor?.(a.id);
+          }}
+        >📷 보기</button>
         <button
           className="inspector-btn"
           onClick={() => {
@@ -403,6 +527,16 @@ function ActorStatusCard({
         <span className={`actor-kind-badge ${actor.kind}`}>{actor.kind}</span>
         <span className="actor-pos">({actor.x},{actor.y})</span>
       </div>
+      {(() => {
+        const cues: string[] = [];
+        if (actor.hunger >= 80) cues.push("🍞굶주림");
+        else if (actor.hunger >= 50) cues.push("🍞배고픔");
+        if (actor.hp <= actor.maxHp * 0.3) cues.push("🩸부상");
+        if (actor.stamina <= 20) cues.push("💤탈진");
+        return cues.length ? (
+          <div style={{ fontSize: 10, color: "#e94560", padding: "2px 4px 0" }}>{cues.join(" · ")}</div>
+        ) : null;
+      })()}
       <div className="actor-bars">
         <div className="actor-bar-row" title={`HP ${actor.hp.toFixed(0)}/${actor.maxHp}`}>
           <span className="actor-bar-label">HP</span>
@@ -493,14 +627,14 @@ function PlayerHUD({ world }: { world: WorldState | null }) {
 }
 
 // ── Quick Spawn Panel ─────────────────────────────────────────────
-function QuickSpawn({ onLog }: { onLog: (msg: string) => void }) {
+function QuickSpawn({ onLog, cell }: { onLog: (msg: string) => void; cell: { x: number; y: number } }) {
   const [names, setNames] = useState<SpawnName>({ npc: "Human NPC", animal: "Bear" });
 
   const spawnActor = (kind: "npc" | "monster", name: string, assetKey: string) => {
     fetch(`${BASE_URL}/spawn/actor`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind, name, x: 10, y: 8, assetKey }),
+      body: JSON.stringify({ kind, name, x: cell.x, y: cell.y, assetKey }),
     })
       .then(() => onLog(`스폰 완료: ${name}`))
       .catch(() => onLog("스폰 실패"));
@@ -510,7 +644,7 @@ function QuickSpawn({ onLog }: { onLog: (msg: string) => void }) {
     fetch(`${BASE_URL}/spawn/item`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "food", x: 12, y: 8, iconKey: "item.food.bread" }),
+      body: JSON.stringify({ type: "food", x: cell.x, y: cell.y, iconKey: "item.food.carrot" }),
     })
       .then(() => onLog("아이템 스폰 완료"))
       .catch(() => onLog("아이템 스폰 실패"));
@@ -518,7 +652,8 @@ function QuickSpawn({ onLog }: { onLog: (msg: string) => void }) {
 
   return (
     <div className="spawn-panel">
-      <div className="inspector-section-title" style={{ marginBottom: 6 }}>Quick Spawn</div>
+      <div className="inspector-section-title" style={{ marginBottom: 6 }}>빠른 배치</div>
+      <div className="selected-cell-chip">선택된 셀: ({cell.x},{cell.y})</div>
       <div className="spawn-row">
         <input
           className="spawn-input"
@@ -547,7 +682,7 @@ function QuickSpawn({ onLog }: { onLog: (msg: string) => void }) {
           className="spawn-btn"
           style={{ flex: 1 }}
           onClick={() => {
-            sendMessage({ kind: "edit", payload: { type: "PLACE_STRUCTURE", structureType: "chest", x: 6, y: 6, width: 1, height: 1, assetKey: "object.chest" } });
+            sendMessage({ kind: "edit", payload: { type: "PLACE_STRUCTURE", structureType: "chest", x: cell.x, y: cell.y, width: 1, height: 1, assetKey: "object.chest" } });
             onLog("상자 배치");
           }}
         >📦 상자</button>
@@ -574,6 +709,8 @@ export const App = () => {
   const [selectedTileId, setSelectedTileId]  = useState<number>(0);
   const [tick,           setTick]            = useState(0);
   const [assetSearch,    setAssetSearch]     = useState("");
+  const [selectedCell,    setSelectedCell]    = useState({ x: 24, y: 16 });
+  const eventFeed = useEventFeed(80);
 
   const addLog = useCallback((msg: string, kind: LogLine["kind"] = "info") => {
     const time = new Date().toLocaleTimeString("ko-KR", { hour12: false });
@@ -592,7 +729,9 @@ export const App = () => {
     if (gameRef.current && !bridgeRef.current) {
       const bridge = startGame(gameRef.current);
       bridgeRef.current = bridge;
+      (window as unknown as { __wiwBridge?: GameBridge }).__wiwBridge = bridge;
       bridge.onEntitySelect((e) => setSelectedEntity(e));
+      bridge.onCellSelect((cell) => setSelectedCell(cell));
       bridge.onLog((msg) => addLog(msg));
     }
 
@@ -777,12 +916,16 @@ export const App = () => {
             </div>
           )}
           <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 4 }}>
-            <QuickSpawn onLog={(msg) => addLog(msg)} />
+            <QuickSpawn onLog={(msg) => addLog(msg)} cell={selectedCell} />
           </div>
-          <div className="inspector-empty">
-            엔티티를 클릭하거나<br />
-            SELECT 도구로<br />
-            선택하세요
+          <div className="inspector-empty" style={{ textAlign: "left", padding: "12px 8px" }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>관찰 시작하기</div>
+            <div style={{ fontSize: 11, color: "var(--text2)", lineHeight: 1.5 }}>
+              · 좌측 주민 카드를 클릭해 상태·생각·기억을 살펴보세요<br />
+              · 지도에서 직접 캐릭터·구조물·아이템을 클릭해도 됩니다<br />
+              · 우측 상단 <b>편집</b> 모드로 세계를 직접 수정할 수 있어요<br />
+              · 하단 <b>연대기</b>에서 마을의 큰 사건을 시간순으로 따라가 보세요
+            </div>
           </div>
         </>
       );
@@ -830,7 +973,7 @@ export const App = () => {
       {/* ── Toolbar ── */}
       <div className="toolbar">
         <div className="toolbar-brand">
-          <span>◈</span> WORLD ENGINE
+          <span>🛠</span> 모찌 마을 편집
         </div>
 
         {/* Play controls */}
@@ -858,7 +1001,7 @@ export const App = () => {
         <div className="toolbar-group">
           <span className="toolbar-label">도구</span>
           {(["SELECT", "MOVE", "TILE", "SPAWN"] as EditorTool[]).map((tool) => {
-            const icons: Record<EditorTool, string> = { SELECT: "↖ SELECT", MOVE: "✋ MOVE", TILE: "🖌 TILE", SPAWN: "➕ SPAWN" };
+            const icons: Record<EditorTool, string> = { SELECT: "↖", MOVE: "✋", TILE: "🖌", SPAWN: "＋" };
             return (
               <button
                 key={tool}
@@ -911,7 +1054,7 @@ export const App = () => {
         {gameMode === "PLAY" ? (
           <div className="panel actors-panel">
             <div className="panel-header">
-              <span className="panel-header-icon">👥</span> ACTORS
+              <span className="panel-header-icon">👥</span> 주민
               <span style={{ marginLeft:"auto", fontSize:10, color:"var(--text3)" }}>
                 {world ? Object.values(world.actors).filter(a=>a.alive).length : 0} alive
               </span>
@@ -928,6 +1071,7 @@ export const App = () => {
                     selected={selectedEntity?.type === "actor" && selectedEntity.id === a.id}
                     onClick={() => {
                       setSelectedEntity({ type: "actor", id: a.id, data: a });
+                      bridgeRef.current?.focusActor(a.id);
                     }}
                   />
                 )) : (
@@ -940,12 +1084,12 @@ export const App = () => {
         ) : (
           <div className="panel assets-panel">
             <div className="panel-header">
-              <span className="panel-header-icon">🗂</span> ASSETS
+              <span className="panel-header-icon">🗂</span> 에셋
             </div>
             <div className="asset-category-tabs">
               {(["tiles", "humans", "animals", "objects", "items"] as AssetCategory[]).map((cat) => {
                 const labels: Record<AssetCategory, string> = {
-                  tiles: "TILES", humans: "NPC", animals: "MOB", objects: "OBJ", items: "ITEM"
+                  tiles: "타일", humans: "사람", animals: "동물", objects: "사물", items: "아이템"
                 };
                 return (
                   <button
@@ -964,7 +1108,7 @@ export const App = () => {
         <div className="viewport-area">
           <div className="viewport-header">
             <span className={`viewport-header-badge ${modeBadgeClass}`}>{modeBadgeText}</span>
-            SCENE VIEW
+            마을 캔버스
             {gameMode !== "PLAY" && (
               <span style={{ fontSize: 10, color: "var(--text3)" }}>
                 우클릭+드래그: 카메라이동 &nbsp;|&nbsp; 스크롤: 줌
@@ -977,7 +1121,7 @@ export const App = () => {
             )}
             {world && (
               <span style={{ fontSize:10, color:"var(--text3)", marginLeft:"auto" }}>
-                Tick: {tick} &nbsp;|&nbsp; {((world.timeOfDay / 24000) * 24).toFixed(1)}h
+                선택된 셀: ({selectedCell.x},{selectedCell.y}) &nbsp;|&nbsp; Tick: {tick}
               </span>
             )}
           </div>
@@ -989,7 +1133,7 @@ export const App = () => {
         {/* ── Right Panel: Inspector ── */}
         <div className="panel inspector-panel">
           <div className="panel-header">
-            <span className="panel-header-icon">🔍</span> INSPECTOR
+            <span className="panel-header-icon">🔍</span> 선택 패널
             {selectedEntity && (
               <button
                 style={{ marginLeft:"auto", background:"none", border:"none", color:"var(--text3)", cursor:"pointer", fontSize:12, padding:"0 4px" }}
@@ -1007,7 +1151,7 @@ export const App = () => {
       {/* ── Console ── */}
       <div className="console-panel">
         <div className="console-header">
-          <span>⬛ CONSOLE</span>
+          <span>오늘의 이야기</span>
           <span className="console-stat">Tick: <span>{tick}</span></span>
           <span className="console-stat">Actors: <span>{world ? Object.keys(world.actors).length : 0}</span></span>
           <span className="console-stat">Structures: <span>{world ? Object.keys(world.structures).length : 0}</span></span>
@@ -1019,14 +1163,19 @@ export const App = () => {
           >지우기</button>
         </div>
         <div className="console-body" ref={logsRef}>
-          {logs.map((line, i) => (
+          {eventFeed.length > 0 ? eventFeed.map((event) => (
+            <div key={event.id} className={`console-line ${event.tone}`}>
+              <span className="console-line-time">{new Date(event.timestamp).toLocaleTimeString("ko-KR", { hour12: false })}</span>
+              <span className="console-line-msg">{event.icon} {event.text}</span>
+            </div>
+          )) : logs.map((line, i) => (
             <div key={i} className={`console-line ${line.kind}`}>
               <span className="console-line-time">{line.time}</span>
               <span className="console-line-msg">{line.msg}</span>
             </div>
           ))}
-          {logs.length === 0 && (
-            <div style={{ color: "var(--text3)", fontSize: 11 }}>— 로그 없음 —</div>
+          {eventFeed.length === 0 && logs.length === 0 && (
+            <div style={{ color: "var(--text3)", fontSize: 11 }}>아직 기록된 이야기가 없습니다.</div>
           )}
         </div>
       </div>

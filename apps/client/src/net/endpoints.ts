@@ -4,11 +4,12 @@ const envApi = (import.meta as unknown as { env?: Record<string, string> }).env?
 const envWs  = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_WS_URL;
 
 const sameOrigin = loc && loc.hostname !== "localhost" && loc.hostname !== "127.0.0.1";
+const PATH_PREFIX = sameOrigin ? "/wiw" : "";
 
 export const API_BASE: string = envApi
-  ?? (sameOrigin ? `${loc!.protocol}//${loc!.host}` : "http://localhost:3001");
+  ?? (sameOrigin ? `${loc!.protocol}//${loc!.host}${PATH_PREFIX}` : "http://localhost:3011");
 
 export const WS_URL: string = envWs
   ?? (sameOrigin
-        ? `${loc!.protocol === "https:" ? "wss" : "ws"}://${loc!.host}`
-        : "ws://localhost:2567");
+        ? `${loc!.protocol === "https:" ? "wss" : "ws"}://${loc!.host}${PATH_PREFIX}`
+        : "ws://localhost:2568");

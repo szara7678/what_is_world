@@ -1,6 +1,6 @@
 import { Room } from "@colyseus/core";
 import type { ClientToServerMessage, RawEvent, WorldState } from "@wiw/shared";
-import { createWorldState, dispatchAction, dispatchEdit, tickWorld } from "@wiw/world-core";
+import { createWorldState, dispatchAction, dispatchEdit } from "@wiw/world-core";
 import { appendRawEvent } from "../logging/eventLogStore";
 import { getWorld, setWorld } from "../state/worldStore";
 
@@ -42,9 +42,10 @@ export class WorldRoom extends Room<WorldState> {
       }
     });
 
+    // Force fresh setState every tick so Colyseus serializes plain-object diffs to clients.
+    // (Reference compare missed in-place mutations from server-side tickWorld in main.ts.)
     this.timer = setInterval(() => {
-      tickWorld(this.state);
-      setWorld(this.state);
+      this.setState(structuredClone(getWorld()));
       this.broadcastPatch();
     }, 100);
   }

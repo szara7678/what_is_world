@@ -1,0 +1,294 @@
+import { promises as fs } from "node:fs";
+import { dirname, resolve } from "node:path";
+import type { HistoryEntry } from "../logging/historyLogStore";
+import { readRecentHistory } from "../logging/historyLogStore";
+import { listSouls, readObservations } from "../persistence/soulStore";
+
+/**
+ * 연대기 (마을의 기록): 일별로 사건을 LLM이 정리한 짧은 일기.
+ * - milestone: 결정론적으로 추출 (history.ndjson 의 의미 있는 사건)
+ * - page: gpt-5.4 가 milestone + 인용 가능한 dialogue 를 받아 작성
+ * - 호출: chatgpt-direct (Responses API). 일별 1회 idempotent.
+ */
+
+const PAGES_FILE = resolve(process.cwd(), "data/chronicle_pages.json");
+const RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
+const AUTH_PATH = `${process.env.HOME}/.codex/auth.json`;
+const TICKS_PER_DAY = 1600; // server tickWorld 의 sim-day 길이와 동기 (24h / 0.015h per tick ≈ 1600)
+
+export interface ChroniclePage {
+  dayId: string;          // "day-1", "day-2", ...
+  dayIndex: number;       // 1-based
+  startTick: number;
+  endTick: number;
+  generatedAt: number;
+  generatedAtTick: number;
+  model: string;
+  title: string;
+  body: string;
+  quotes: string[];
+  milestoneCount: number;
+  milestones: Array<{ tick: number; kind: string; text: string; actorId?: string }>;
+}
+
+interface PagesFile { pages: ChroniclePage[] }
+
+async function readPages(): Promise<ChroniclePage[]> {
+  try {
+    const raw = await fs.readFile(PAGES_FILE, "utf-8");
+    const data = JSON.parse(raw) as PagesFile;
+    return data.pages ?? [];
+  } catch {
+    return [];
+  }
+}
+
+async function writePages(pages: ChroniclePage[]): Promise<void> {
+  await fs.mkdir(dirname(PAGES_FILE), { recursive: true });
+  await fs.writeFile(PAGES_FILE, JSON.stringify({ pages }, null, 2), "utf-8");
+}
+
+export async function listChroniclePages(): Promise<ChroniclePage[]> {
+  return readPages();
+}
+
+/**
+ * milestone 결정론적 추출. history.ndjson 에서 의미 있는 kind 만 추출.
+ * 추후 reflection lesson, agenda completed/blocked, level-up 등 확장.
+ */
+function extractMilestones(history: HistoryEntry[], startTick: number, endTick: number): HistoryEntry[] {
+  // day.rollover 는 의미 없는 시간 표시라 제외. 나머지 의미 있는 사건은 다 포함.
+  const SKIP = ["day.rollover"];
+  return history.filter((h) => h.tick >= startTick && h.tick < endTick && !SKIP.includes(h.kind));
+}
+
+interface AuthCache { token: string; accountId: string; loadedAt: number }
+let authCache: AuthCache | null = null;
+async function readAuth(): Promise<AuthCache | null> {
+  if (authCache && Date.now() - authCache.loadedAt < 60_000) return authCache;
+  try {
+    const raw = await fs.readFile(AUTH_PATH, "utf-8");
+    const data = JSON.parse(raw);
+    const token = data?.tokens?.access_token;
+    const accountId = data?.tokens?.account_id;
+    if (typeof token !== "string" || typeof accountId !== "string") return null;
+    authCache = { token, accountId, loadedAt: Date.now() };
+    return authCache;
+  } catch { return null; }
+}
+
+interface LlmPage { title: string; body: string; quotes: string[] }
+
+async function callChatgptResponses(model: string, instructions: string, userText: string): Promise<string | null> {
+  const auth = await readAuth();
+  if (!auth) return null;
+  const body = {
+    model,
+    instructions,
+    input: [{ type: "message", role: "user", content: [{ type: "input_text", text: userText }] }],
+    store: false,
+    stream: true,
+  };
+  try {
+    const res = await fetch(RESPONSES_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${auth.token}`,
+        "chatgpt-account-id": auth.accountId,
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      console.warn(`[chronicle] gpt ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      if (res.status === 401) authCache = null;
+      return null;
+    }
+    return await readStreamText(res);
+  } catch (e) {
+    console.warn("[chronicle] gpt error:", e);
+    return null;
+  }
+}
+
+async function readStreamText(res: Response): Promise<string> {
+  const body = res.body;
+  if (!body) return "";
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const evt = JSON.parse(payload);
+        if (evt.type === "response.output_text.delta" && typeof evt.delta === "string") {
+          parts.push(evt.delta);
+        }
+      } catch {}
+    }
+  }
+  return parts.join("");
+}
+
+function parseLlmJson(text: string): LlmPage | null {
+  let t = text.trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) t = fence[1].trim();
+  const obj = t.match(/\{[\s\S]*\}/);
+  if (!obj) return null;
+  try {
+    const parsed = JSON.parse(obj[0]);
+    const title = String(parsed.title ?? "").slice(0, 80) || "이름 없는 하루";
+    const body = String(parsed.body ?? "").slice(0, 2000);
+    const quotes = Array.isArray(parsed.quotes) ? parsed.quotes.map(String).slice(0, 3) : [];
+    if (!body) return null;
+    return { title, body, quotes };
+  } catch {
+    return null;
+  }
+}
+
+const INSTRUCTIONS = `너는 작은 마을의 기록자다. 어제 마을에서 실제로 일어난 사건 목록을 받아, 그날 하루를 짧은 일기 (한국어 2-3문단) 로 옮긴다.
+
+규칙:
+- 사실 외에는 새 사건을 만들지 마라. 입력에 없는 인물·물건·장소를 등장시키지 마라.
+- NPC 의 내면은 상상하지 말고, 실제 행동·대화·결과만 묘사해라.
+- 어조는 따뜻하고 담백한 단편 소설 톤. 마을 기록자의 1인칭 또는 관찰자 시점.
+- title 은 그날을 한 문장으로 요약 (예: "햇살이 늦게 든 아침").
+- quotes 는 입력에 직접 등장한 짧은 말 1-2개. 입력에 없는 대사 만들지 마라.
+
+JSON 한 개로만 출력한다:
+{"title":"...","body":"2-3문단 일기","quotes":["...","..."]}`;
+
+interface BuildOptions {
+  dayIndex: number;
+  startTick: number;
+  endTick: number;
+  history: HistoryEntry[];
+  observations: { actorId: string; text: string; tick: number; tags: string[] }[];
+  souls: { name: string; persona?: string }[];
+  model: string;
+  generatedAtTick: number;
+}
+
+async function buildPage(opts: BuildOptions): Promise<ChroniclePage | null> {
+  const milestones = extractMilestones(opts.history, opts.startTick, opts.endTick).slice(0, 40);
+  const dialogue = opts.observations
+    .filter((o) => o.tick >= opts.startTick && o.tick < opts.endTick && o.tags.includes("speak"))
+    .slice(-12);
+  const lessonObs = opts.observations
+    .filter((o) => o.tick >= opts.startTick && o.tick < opts.endTick && o.tags.includes("lesson"))
+    .slice(-6);
+
+  if (milestones.length === 0 && dialogue.length === 0 && lessonObs.length === 0) {
+    return null; // 그날 적을 게 없으면 페이지 생성하지 않음
+  }
+
+  const lines: string[] = [];
+  lines.push(`# 어제(day ${opts.dayIndex}) 마을 사람들`);
+  for (const s of opts.souls.slice(0, 8)) lines.push(`- ${s.name}${s.persona ? ` (${s.persona.slice(0, 30)})` : ""}`);
+  lines.push("");
+  lines.push(`# 어제 일어난 일 (tick ${opts.startTick}~${opts.endTick})`);
+  if (milestones.length === 0) lines.push("- (큰 사건 없음)");
+  for (const m of milestones) lines.push(`- [tick ${m.tick}] ${m.kind}: ${m.text}${m.actorId ? ` (${m.actorId})` : ""}`);
+  if (dialogue.length) {
+    lines.push("");
+    lines.push("# 어제 들린 말들");
+    for (const d of dialogue) lines.push(`- [tick ${d.tick}] ${d.actorId}: ${d.text}`);
+  }
+  if (lessonObs.length) {
+    lines.push("");
+    lines.push("# 어제 마을이 배운 것");
+    for (const o of lessonObs) lines.push(`- [tick ${o.tick}] ${o.actorId}: ${o.text}`);
+  }
+  lines.push("");
+  lines.push("위 사건들을 짧은 일기 (한국어 2-3문단) 로 옮겨라. JSON 한 개만 출력.");
+
+  const userText = lines.join("\n");
+  const raw = await callChatgptResponses(opts.model, INSTRUCTIONS, userText);
+  if (!raw) return null;
+  const llm = parseLlmJson(raw);
+  if (!llm) return null;
+
+  return {
+    dayId: `day-${opts.dayIndex}`,
+    dayIndex: opts.dayIndex,
+    startTick: opts.startTick,
+    endTick: opts.endTick,
+    generatedAt: Date.now(),
+    generatedAtTick: opts.generatedAtTick,
+    model: opts.model,
+    title: llm.title,
+    body: llm.body,
+    quotes: llm.quotes,
+    milestoneCount: milestones.length,
+    milestones: milestones.map((m) => ({ tick: m.tick, kind: m.kind, text: m.text, actorId: m.actorId })),
+  };
+}
+
+export async function ensureChroniclePages(currentTick: number, model = "gpt-5.4"): Promise<ChroniclePage[]> {
+  const pages = await readPages();
+  const completedDays = Math.floor(currentTick / TICKS_PER_DAY); // day 1 은 tick 2400 도달 시 생성 가능
+  if (completedDays === 0) return pages;
+
+  // 이미 있는 dayIndex set
+  const existing = new Set(pages.map((p) => p.dayIndex));
+  const allHistory = await readRecentHistory(2000);
+  const allSouls = await listSouls();
+  // monster 는 chronicle 본문에서 등장 인물에서 빼자 (사람 NPC + player 만)
+  const peopleSouls = allSouls.filter((s) => !s.actorId.startsWith("monster-"));
+  const souls = peopleSouls.map((s) => ({ name: s.name, persona: s.persona, actorId: s.actorId }));
+
+  // 관찰: speak/lesson 태그 만 모아서 (전체는 비싸니까)
+  const allObs: { actorId: string; text: string; tick: number; tags: string[] }[] = [];
+  for (const s of souls) {
+    const obs = await readObservations(s.actorId, 200);
+    for (const o of obs) {
+      if (o.tags.includes("speak") || o.tags.includes("lesson")) {
+        allObs.push({ actorId: s.actorId, text: o.text, tick: o.tick, tags: o.tags });
+      }
+    }
+  }
+
+  let updated = false;
+  for (let day = 1; day <= completedDays; day++) {
+    if (existing.has(day)) continue;
+    const startTick = (day - 1) * TICKS_PER_DAY;
+    const endTick = day * TICKS_PER_DAY;
+    const page = await buildPage({
+      dayIndex: day,
+      startTick, endTick,
+      history: allHistory,
+      observations: allObs,
+      souls,
+      model,
+      generatedAtTick: currentTick,
+    });
+    if (page) {
+      pages.push(page);
+      updated = true;
+      console.log(`[chronicle] day-${day} page generated (${page.milestoneCount} milestones, model=${model})`);
+    }
+  }
+  if (updated) await writePages(pages);
+  return pages;
+}
+
+let lastEnsureAtTick = 0;
+const ENSURE_COOLDOWN_TICKS = 60; // 같은 tick 군에서 중복 호출 방지
+
+export async function maybeEnsureOnTick(currentTick: number, model = "gpt-5.4"): Promise<void> {
+  if (currentTick - lastEnsureAtTick < ENSURE_COOLDOWN_TICKS) return;
+  lastEnsureAtTick = currentTick;
+  await ensureChroniclePages(currentTick, model).catch((e) => console.warn("[chronicle] ensure error:", e));
+}

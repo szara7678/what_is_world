@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { API_BASE } from "../net/endpoints";
 
 interface PublicConfig {
-  provider: "openrouter" | "mock";
+  provider: "mock" | "openrouter" | "local-proxy";
   model: string;
   baseUrl: string;
   tickIntervalMs: number;
@@ -14,17 +14,22 @@ interface PublicConfig {
 }
 interface ModelPreset { label: string; value: string; note: string }
 
+const LOCAL_PROXY_DEFAULTS = {
+  baseUrl: "http://127.0.0.1:18796/v1",
+  model: "gpt-5.5-mini"
+};
+
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [cfg, setCfg] = useState<PublicConfig | null>(null);
   const [models, setModels] = useState<ModelPreset[]>([]);
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
-  const [provider, setProvider] = useState<"openrouter" | "mock">("mock");
+  const [provider, setProvider] = useState<"mock" | "openrouter" | "local-proxy">("mock");
   const [tickMs, setTickMs] = useState(8000);
   const [maxActors, setMaxActors] = useState(2);
   const [enabled, setEnabled] = useState(false);
-  const [reflectMs, setReflectMs] = useState(45000);
+  const [reflectMs, setReflectMs] = useState(90000);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -40,7 +45,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         setTickMs(json.config.tickIntervalMs);
         setMaxActors(json.config.maxActorsPerTick);
         setEnabled(json.config.enabled);
-        setReflectMs(json.config.reflectIntervalMs ?? 45000);
+        setReflectMs(json.config.reflectIntervalMs ?? 90000);
       })
       .catch((e) => setMsg(`로드 실패: ${e}`));
   }, []);
@@ -85,11 +90,22 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
         <div className="form-row">
           <label>Provider</label>
-          <select value={provider} onChange={(e) => setProvider(e.target.value as "openrouter" | "mock")}>
+          <select
+            value={provider}
+            onChange={(e) => {
+              const next = e.target.value as "mock" | "openrouter" | "local-proxy";
+              setProvider(next);
+              if (next === "local-proxy") {
+                setBaseUrl(LOCAL_PROXY_DEFAULTS.baseUrl);
+                setModel(LOCAL_PROXY_DEFAULTS.model);
+              }
+            }}
+          >
             <option value="mock">Mock (규칙 기반 더미)</option>
             <option value="openrouter">OpenRouter</option>
+            <option value="local-proxy">Local Proxy</option>
           </select>
-          <div className="hint">처음엔 Mock 으로 동작 확인 → 토큰 넣고 OpenRouter 로 전환해보세요.</div>
+          <div className="hint">Mock으로 동작 확인 후 OpenRouter 또는 로컬 프록시로 전환해보세요.</div>
         </div>
 
         <div className="form-row">
@@ -123,7 +139,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
         <div className="form-row row-horiz">
           <label>Tick (ms)</label>
-          <input type="number" min={2000} max={60000} step={500} value={tickMs} onChange={(e) => setTickMs(Number(e.target.value))} style={{ width: 100 }} />
+          <input type="number" min={1000} max={60000} step={500} value={tickMs} onChange={(e) => setTickMs(Number(e.target.value))} style={{ width: 100 }} />
           <label>동시 주민</label>
           <input type="number" min={1} max={10} value={maxActors} onChange={(e) => setMaxActors(Number(e.target.value))} style={{ width: 60 }} />
         </div>

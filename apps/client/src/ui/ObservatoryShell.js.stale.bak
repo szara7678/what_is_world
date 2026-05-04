@@ -1,0 +1,412 @@
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { startGame } from "../game/startGame";
+import { joinWorld } from "../net/room";
+import { API_BASE } from "../net/endpoints";
+import { useEventFeed } from "./useEventFeed";
+import { useObservations } from "./useObservations";
+import { useSpeakBubbles } from "./useSpeakBubbles";
+import { SettingsModal } from "./SettingsModal";
+import { Chronicle } from "./Chronicle";
+export function ObservatoryShell({ onSwitchMode }) {
+    const stageRef = useRef(null);
+    const bridgeRef = useRef(null);
+    const [world, setWorld] = useState(null);
+    const [selectedId, setSelectedId] = useState(null);
+    const [soul, setSoul] = useState(null);
+    const [thought, setThought] = useState(null);
+    const [showSettings, setShowSettings] = useState(false);
+    const [brainStatus, setBrainStatus] = useState("off");
+    const [intentMap, setIntentMap] = useState({});
+    const [feedTab, setFeedTab] = useState("today");
+    const [showMonsters, setShowMonsters] = useState(false);
+    const [showSystemSteps, setShowSystemSteps] = useState(false);
+    const [viewMode, setViewMode] = useState("default");
+    const [feedHeight, setFeedHeight] = useState(null);
+    const dragRef = useRef(null);
+    const onDragStart = (e) => {
+        e.preventDefault();
+        const root = document.querySelector(".obs-root");
+        const feedEl = root?.querySelector(".obs-feed");
+        const h0 = feedEl?.getBoundingClientRect().height ?? 180;
+        dragRef.current = { startY: e.clientY, startH: h0 };
+        e.target.setPointerCapture(e.pointerId);
+    };
+    const onDragMove = (e) => {
+        if (!dragRef.current)
+            return;
+        const dy = dragRef.current.startY - e.clientY; // 위로 끌면 높이↑
+        const next = Math.max(80, Math.min(window.innerHeight - 200, dragRef.current.startH + dy));
+        setFeedHeight(next);
+    };
+    const onDragEnd = (e) => {
+        dragRef.current = null;
+        try {
+            e.target.releasePointerCapture(e.pointerId);
+        }
+        catch { }
+    };
+    const [mobileTab, setMobileTab] = useState("stage");
+    const [isMobile, setIsMobile] = useState(typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches);
+    useEffect(() => {
+        if (typeof window === "undefined")
+            return;
+        const mql = window.matchMedia("(max-width: 768px)");
+        const handler = (e) => setIsMobile(e.matches);
+        mql.addEventListener("change", handler);
+        return () => mql.removeEventListener("change", handler);
+    }, []);
+    const events = useEventFeed(120);
+    const speakBubbles = useSpeakBubbles();
+    // Connect + stage. Colyseus join is kept for action dispatch (sendMessage),
+    // but we authoritatively pull world state from REST every 400ms because
+    // Colyseus 0.16 with plain-object state does not broadcast diffs.
+    useEffect(() => {
+        let cancelled = false;
+        let pollTimer = null;
+        (async () => {
+            try {
+                await joinWorld();
+            }
+            catch { }
+            if (cancelled)
+                return;
+            const stage = stageRef.current;
+            if (stage) {
+                bridgeRef.current = startGame(stage);
+                bridgeRef.current.setMode("PLAY");
+            }
+            const pull = async () => {
+                try {
+                    const r = await fetch(`${API_BASE}/world`);
+                    const w = await r.json();
+                    if (cancelled)
+                        return;
+                    setWorld(w);
+                    bridgeRef.current?.updateWorld(w);
+                }
+                catch { }
+            };
+            void pull();
+            pollTimer = window.setInterval(pull, 400);
+        })();
+        return () => {
+            cancelled = true;
+            if (pollTimer !== null)
+                window.clearInterval(pollTimer);
+            bridgeRef.current?.destroy();
+        };
+    }, []);
+    // Load brain status
+    useEffect(() => {
+        const pull = () => fetch(`${API_BASE}/config/brain`)
+            .then((r) => r.json())
+            .then((j) => {
+            if (!j.config.enabled)
+                setBrainStatus("off");
+            else
+                setBrainStatus(j.config.provider);
+        })
+            .catch(() => { });
+        pull();
+        const id = setInterval(pull, 5000);
+        return () => clearInterval(id);
+    }, [showSettings]);
+    // Load actor intent bubbles
+    useEffect(() => {
+        let cancelled = false;
+        let controller = null;
+        const pull = () => {
+            controller?.abort();
+            controller = new AbortController();
+            fetch(`${API_BASE}/thoughts/summary`, { signal: controller.signal })
+                .then((r) => r.json())
+                .then((j) => {
+                if (cancelled)
+                    return;
+                const next = Object.fromEntries(Object.entries(j.intents).map(([actorId, summary]) => [
+                    actorId,
+                    { intent: summary.intent, emotion: summary.emotion }
+                ]));
+                setIntentMap(next);
+                bridgeRef.current?.updateIntents(next);
+            })
+                .catch(() => { });
+        };
+        pull();
+        const id = setInterval(pull, 1000);
+        return () => {
+            cancelled = true;
+            controller?.abort();
+            clearInterval(id);
+        };
+    }, []);
+    useEffect(() => {
+        bridgeRef.current?.updateIntents(intentMap);
+    }, [intentMap]);
+    useEffect(() => {
+        bridgeRef.current?.updateBubbles(speakBubbles);
+    }, [speakBubbles]);
+    // Load soul / thought for selected
+    useEffect(() => {
+        if (!selectedId) {
+            setSoul(null);
+            setThought(null);
+            return;
+        }
+        fetch(`${API_BASE}/souls/${selectedId}`).then((r) => r.json()).then((j) => setSoul(j.soul)).catch(() => setSoul(null));
+        fetch(`${API_BASE}/thoughts/${selectedId}`).then((r) => r.json()).then((j) => setThought(j.thought)).catch(() => setThought(null));
+    }, [selectedId]);
+    const actors = world ? Object.values(world.actors) : [];
+    const selected = selectedId ? actors.find((a) => a.id === selectedId) : undefined;
+    const todHours = world ? world.timeOfDay : 0;
+    const dayPhase = useCallback((h) => {
+        if (h < 5)
+            return { icon: "🌙", label: "밤" };
+        if (h < 7)
+            return { icon: "🌅", label: "새벽" };
+        if (h < 11)
+            return { icon: "🌞", label: "아침" };
+        if (h < 15)
+            return { icon: "☀️", label: "낮" };
+        if (h < 18)
+            return { icon: "🌤️", label: "오후" };
+        if (h < 21)
+            return { icon: "🌇", label: "저녁" };
+        return { icon: "🌙", label: "밤" };
+    }, []);
+    const phase = dayPhase(todHours);
+    const dayN = world ? Math.floor(world.tick / 2400) + 1 : 1;
+    // 주민 카드 클릭 = 선택만. 카메라 이동은 별도 "보기" 버튼.
+    const selectResident = useCallback((actorId) => {
+        const next = actorId === selectedId ? null : actorId;
+        setSelectedId(next);
+    }, [selectedId]);
+    const focusResident = useCallback((actorId) => {
+        bridgeRef.current?.focusActor(actorId);
+    }, []);
+    const rootClasses = ["obs-root"];
+    if (!isMobile && viewMode !== "default")
+        rootClasses.push(viewMode);
+    if (isMobile)
+        rootClasses.push(`mobile-tab-${mobileTab}`);
+    const rootStyle = !isMobile && feedHeight && viewMode === "default"
+        ? { gridTemplateRows: `56px 1fr ${feedHeight}px` }
+        : undefined;
+    // 모바일 주민 카드 탭 시 inspector tab 으로 전환 (sheet 형태)
+    const selectResidentMobile = useCallback((id) => {
+        selectResident(id);
+        if (isMobile)
+            setMobileTab("inspector");
+    }, [selectResident, isMobile]);
+    return (_jsxs("div", { className: rootClasses.join(" "), style: rootStyle, children: [_jsxs("div", { className: "obs-top", children: [_jsxs("div", { className: "obs-brand", children: ["\uD83C\uDF3C what is world", !isMobile && _jsx("span", { className: "sub", children: "cozy observatory" })] }), !isMobile && (_jsxs("div", { className: "obs-time", children: [phase.icon, " Day ", dayN, " \u00B7 ", phase.label, " ", String(Math.floor(todHours)).padStart(2, "0"), ":", String(Math.floor((todHours % 1) * 60)).padStart(2, "0")] })), _jsxs("div", { style: { marginLeft: "auto", display: "inline-flex", gap: 8, alignItems: "center" }, children: [!isMobile && (_jsxs("div", { className: "viewmode-seg", title: "\uD328\uB110 \uBCF4\uAE30 \uBAA8\uB4DC", children: [_jsx("button", { className: viewMode === "default" ? "active" : "", onClick: () => setViewMode("default"), children: "\uAE30\uBCF8" }), _jsx("button", { className: viewMode === "expand-feed" ? "active" : "", onClick: () => setViewMode("expand-feed"), children: "\uC774\uC57C\uAE30 \uD655\uC7A5" }), _jsx("button", { className: viewMode === "expand-inspector" ? "active" : "", onClick: () => setViewMode("expand-inspector"), children: "\uC778\uC2A4\uD399\uD130" }), _jsx("button", { className: viewMode === "expand-residents" ? "active" : "", onClick: () => setViewMode("expand-residents"), children: "\uC8FC\uBBFC" })] })), _jsx(BrainBadge, { status: brainStatus }), !isMobile && (_jsxs("div", { className: "mode-seg", children: [_jsx("button", { className: "active", children: "\uAD00\uCE21" }), _jsx("button", { onClick: onSwitchMode, children: "\uD3B8\uC9D1" })] })), _jsx("button", { className: "icon-btn", onClick: () => setShowSettings(true), title: "\uC124\uC815", children: "\u2699\uFE0F" })] })] }), _jsxs("div", { className: "obs-left", children: [_jsxs("h4", { style: { margin: "4px 6px 8px", fontSize: 11, letterSpacing: ".08em", color: "var(--text3)" }, children: ["\uC8FC\uBBFC (", actors.length, ")"] }), actors.length === 0 && _jsx("div", { className: "empty", children: "\uC8FC\uBBFC\uC774 \uC544\uC9C1 \uC5C6\uC5B4\uC694." }), actors.map((a) => (_jsx(ResidentCard, { actor: a, selected: a.id === selectedId, onClick: () => selectResidentMobile(a.id), onFocus: () => focusResident(a.id) }, a.id)))] }), _jsx("div", { className: "obs-stage", ref: stageRef, onClick: isMobile && mobileTab !== "stage" ? () => setMobileTab("stage") : undefined }), _jsxs("div", { className: "obs-right", children: [!selected && _jsx("div", { className: "empty", children: "\uC67C\uCABD\uC5D0\uC11C \uC8FC\uBBFC\uC744 \uACE8\uB77C\uBCF4\uC138\uC694." }), selected && (_jsx(AgentDetail, { actor: selected, soul: soul, thought: thought, onSoulUpdate: (s) => setSoul(s), selectedId: selectedId }))] }), _jsxs("div", { className: "obs-feed", children: [!isMobile && (_jsx("div", { className: "feed-drag-handle", onPointerDown: onDragStart, onPointerMove: onDragMove, onPointerUp: onDragEnd, onPointerCancel: onDragEnd, onDoubleClick: () => setFeedHeight(null), title: "\uB4DC\uB798\uADF8\uB85C \uB192\uC774 \uC870\uC808 (\uB354\uBE14\uD074\uB9AD = \uAE30\uBCF8)", children: _jsx("span", { className: "grip" }) })), _jsxs("div", { className: "feed", children: [_jsxs("div", { className: "feed-head", children: [_jsxs("div", { className: "mode-seg", children: [_jsx("button", { className: feedTab === "chronicle" ? "active" : "", onClick: () => setFeedTab("chronicle"), children: "\uC5F0\uB300\uAE30" }), _jsx("button", { className: feedTab === "today" ? "active" : "", onClick: () => setFeedTab("today"), children: "\uC624\uB298\uC758 \uC774\uC57C\uAE30" })] }), _jsx("span", { style: { color: "var(--text3)", fontSize: 11 }, children: feedTab === "today" ? `${events.length}건` : "history.ndjson" }), !isMobile && (_jsx("button", { className: "icon-btn", style: { marginLeft: "auto", fontSize: 14 }, title: viewMode === "expand-feed" ? "기본 높이로 줄이기" : "이야기 패널 위로 늘리기", onClick: () => setViewMode(viewMode === "expand-feed" ? "default" : "expand-feed"), children: viewMode === "expand-feed" ? "⤓" : "⤒" }))] }), feedTab === "chronicle" && (_jsx(Chronicle, { world: world, onActorClick: selectResident })), feedTab === "today" && (_jsxs(_Fragment, { children: [_jsxs("div", { style: { display: "flex", gap: 8, padding: "4px 6px", fontSize: 10, color: "var(--text3)" }, children: [_jsxs("label", { style: { display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer" }, children: [_jsx("input", { type: "checkbox", checked: showMonsters, onChange: (e) => setShowMonsters(e.target.checked) }), "\uBAAC\uC2A4\uD130\u00B7\uB3D9\uBB3C"] }), _jsxs("label", { style: { display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer" }, children: [_jsx("input", { type: "checkbox", checked: showSystemSteps, onChange: (e) => setShowSystemSteps(e.target.checked) }), "\uC2DC\uC2A4\uD15C \uC6B4\uBC18(MOVE)"] })] }), (() => {
+                                        const filtered = events.filter((n) => {
+                                            const a = n.raw?.actorId ?? n.actorIds[0] ?? "";
+                                            if (!showMonsters && a.startsWith("monster-"))
+                                                return false;
+                                            if (!showSystemSteps && n.raw?.payload && n.raw.payload.provider === "system")
+                                                return false;
+                                            // SYSTEM_SKIP / AGENDA_PATH_FAIL 같은 디버그 이벤트는 시스템 토글 따라
+                                            if (!showSystemSteps && (n.raw?.type === "SYSTEM_SKIP" || n.raw?.type === "AGENDA_PATH_FAIL"))
+                                                return false;
+                                            return true;
+                                        });
+                                        if (filtered.length === 0)
+                                            return _jsx("div", { className: "empty", children: "\uC544\uC9C1 \uC544\uBB34 \uC77C\uB3C4 \uC5C6\uC5B4\uC694." });
+                                        return filtered.slice(-60).reverse().map((n) => (_jsxs("div", { className: `feed-item tone-${n.tone}`, children: [_jsx("span", { className: "feed-icon", children: n.icon }), _jsx("span", { className: "feed-text", children: n.text }), _jsxs("span", { className: "feed-time", children: ["tick ", n.tick] })] }, n.id)));
+                                    })()] }))] })] }), isMobile && (_jsxs("div", { className: "obs-tabbar", children: [_jsxs("button", { className: mobileTab === "story" ? "active" : "", onClick: () => setMobileTab("story"), children: [_jsx("span", { className: "tab-icon", children: "\uD83D\uDCAC" }), _jsx("span", { className: "tab-label", children: "\uC774\uC57C\uAE30" })] }), _jsxs("button", { className: mobileTab === "stage" ? "active" : "", onClick: () => setMobileTab("stage"), children: [_jsx("span", { className: "tab-icon", children: "\uD83D\uDDFA\uFE0F" }), _jsx("span", { className: "tab-label", children: "\uC9C0\uB3C4" })] }), _jsxs("button", { className: mobileTab === "residents" ? "active" : "", onClick: () => setMobileTab("residents"), children: [_jsx("span", { className: "tab-icon", children: "\uD83D\uDC65" }), _jsx("span", { className: "tab-label", children: "\uC8FC\uBBFC" })] }), _jsxs("button", { className: mobileTab === "inspector" ? "active" : "", onClick: () => setMobileTab("inspector"), children: [_jsx("span", { className: "tab-icon", children: "\uD83D\uDCD6" }), _jsx("span", { className: "tab-label", children: "\uC0C1\uD0DC" })] })] })), showSettings && _jsx(SettingsModal, { onClose: () => setShowSettings(false) })] }));
+}
+function BrainBadge({ status }) {
+    const map = {
+        off: { dot: "", label: "두뇌 꺼짐", color: "var(--text3)" },
+        mock: { dot: "ok", label: "Mock 두뇌", color: "var(--accent3)" },
+        openrouter: { dot: "ok", label: "OpenRouter", color: "var(--accent)" },
+        "local-proxy": { dot: "ok", label: "로컬 프록시", color: "var(--accent)" },
+        "chatgpt-direct": { dot: "ok", label: "ChatGPT 직접", color: "var(--accent)" }
+    };
+    const m = map[status] ?? { dot: "", label: status, color: "var(--text3)" };
+    return (_jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, color: m.color, fontSize: 12 }, children: [_jsx("span", { className: `status-dot ${m.dot}` }), " ", m.label] }));
+}
+function ResidentCard({ actor, selected, onClick, onFocus }) {
+    const hpPct = actor.maxHp > 0 ? (actor.hp / actor.maxHp) * 100 : 0;
+    const stPct = actor.maxStamina > 0 ? (actor.stamina / actor.maxStamina) * 100 : 0;
+    const hgPct = Math.min(100, actor.hunger);
+    const mood = hpPct < 25 ? "😣" : hgPct > 70 ? "😩" : stPct < 20 ? "😴" : "🙂";
+    const hpColor = hpPct > 50 ? "var(--accent3)" : hpPct > 25 ? "var(--accent4)" : "var(--stop)";
+    const cardTone = !actor.alive ? "dead" : hpPct < 25 ? "critical" : "healthy";
+    return (_jsxs("div", { className: `rcard ${cardTone}${selected ? " selected" : ""}`, onClick: onClick, children: [_jsx("div", { className: "rcard-avatar", "aria-hidden": "true", children: _jsx("span", { children: iconForActor(actor) }) }), _jsxs("div", { className: "rcard-main", children: [_jsxs("div", { className: "rcard-head", children: [_jsx("span", { className: "rcard-name", children: actor.name }), onFocus && (_jsx("button", { type: "button", className: "rcard-focus-btn", title: "\uC774 \uC8FC\uBBFC\uC774 \uC788\uB294 \uC790\uB9AC\uB85C \uCE74\uBA54\uB77C \uC774\uB3D9", onClick: (e) => { e.stopPropagation(); onFocus(); }, children: "\uD83C\uDFAF" }))] }), _jsxs("div", { className: "rcard-meta", children: [_jsx("span", { children: mood }), _jsxs("span", { children: ["(", actor.x, ", ", actor.y, ")"] })] }), _jsx(Meter, { label: "HP", pct: hpPct, color: hpColor }), _jsx(Meter, { label: "STM", pct: stPct, color: "var(--accent4)" }), _jsx(Meter, { label: "HGR", pct: hgPct, color: hgPct > 70 ? "var(--pause)" : "var(--text3)" })] })] }));
+}
+function Meter({ label, pct, color }) {
+    return (_jsxs("div", { className: "rcard-bar-row", children: [_jsx("span", { className: "lbl", children: label }), _jsx("div", { className: "rcard-bar", children: _jsx("div", { style: { width: `${pct}%`, background: color } }) })] }));
+}
+function roleForActor(actor) {
+    const key = `${actor.assetKey ?? ""} ${actor.name}`.toLowerCase();
+    if (actor.kind === "monster")
+        return "monster";
+    if (actor.kind === "player")
+        return "hero";
+    if (key.includes("baker"))
+        return "baker";
+    if (key.includes("farmer") || key.includes("villager"))
+        return "farmer";
+    if (key.includes("merchant") || key.includes("yui"))
+        return "merchant";
+    if (key.includes("guard") || key.includes("jin"))
+        return "guard";
+    return "villager";
+}
+function roleLabel(role) {
+    switch (role) {
+        case "hero": return "hero";
+        case "baker": return "baker";
+        case "farmer": return "farmer";
+        case "merchant": return "merchant";
+        case "guard": return "guard";
+        case "monster": return "boar";
+        default: return "npc";
+    }
+}
+function iconForActor(actor) {
+    if (actor.kind === "player")
+        return "👤";
+    if (actor.kind === "monster")
+        return "🐗";
+    return "🧑‍🌾";
+}
+function AgentDetail({ actor, soul, thought, onSoulUpdate, selectedId }) {
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(null);
+    const [tab, setTab] = useState("now");
+    const obs = useObservations(tab === "memories" ? selectedId : null, 60);
+    const [speakDraft, setSpeakDraft] = useState("");
+    const [speakStatus, setSpeakStatus] = useState("idle");
+    const [oracleDraft, setOracleDraft] = useState("");
+    const [oracleStatus, setOracleStatus] = useState("idle");
+    const sendSpeak = async () => {
+        const text = speakDraft.trim();
+        if (!text || !selectedId)
+            return;
+        setSpeakStatus("sending");
+        try {
+            await fetch(`${API_BASE}/agent/${selectedId}/speak`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: text, from: "방문자" })
+            });
+            setSpeakDraft("");
+            setSpeakStatus("sent");
+            window.setTimeout(() => setSpeakStatus("idle"), 1400);
+        }
+        catch {
+            setSpeakStatus("idle");
+        }
+    };
+    const toggleFollower = async (next) => {
+        if (!selectedId)
+            return;
+        const url = next ? `${API_BASE}/agent/${selectedId}/follow` : `${API_BASE}/agent/${selectedId}/unfollow`;
+        const r = await fetch(url, { method: "POST" });
+        const j = await r.json();
+        if (j.soul)
+            onSoulUpdate(j.soul);
+    };
+    const sendOracle = async () => {
+        const text = oracleDraft.trim();
+        if (!text || !selectedId)
+            return;
+        setOracleStatus("sending");
+        try {
+            const r = await fetch(`${API_BASE}/agent/${selectedId}/oracle`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: text })
+            });
+            const j = await r.json();
+            if (!j.ok) {
+                setOracleStatus("error");
+                window.setTimeout(() => setOracleStatus("idle"), 2000);
+                return;
+            }
+            if (j.soul)
+                onSoulUpdate(j.soul);
+            setOracleDraft("");
+            setOracleStatus("sent");
+            window.setTimeout(() => setOracleStatus("idle"), 1600);
+        }
+        catch {
+            setOracleStatus("error");
+            window.setTimeout(() => setOracleStatus("idle"), 2000);
+        }
+    };
+    const startEdit = () => { if (soul) {
+        setDraft({ ...soul });
+        setEditing(true);
+    } };
+    const saveEdit = async () => {
+        if (!draft)
+            return;
+        const r = await fetch(`${API_BASE}/souls/${actor.id}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(draft)
+        });
+        const j = await r.json();
+        onSoulUpdate(j.soul);
+        setEditing(false);
+    };
+    return (_jsxs(_Fragment, { children: [_jsxs("div", { className: "acard", children: [_jsx("h4", { children: "\uC9C0\uAE08\uC758 \uC601\uD63C" }), _jsx("p", { style: { fontWeight: 600, fontSize: 15 }, children: actor.name }), _jsxs("div", { className: "meta", children: [actor.kind, " \u00B7 (", actor.x, ", ", actor.y, ")"] }), _jsxs("div", { className: "mode-seg", style: { marginTop: 10 }, children: [_jsx("button", { className: tab === "now" ? "active" : "", onClick: () => setTab("now"), children: "\uC9C0\uAE08" }), _jsx("button", { className: tab === "memories" ? "active" : "", onClick: () => setTab("memories"), children: "\uCD5C\uADFC \uAE30\uC5B5" })] })] }), tab === "memories" && (_jsxs("div", { className: "acard", children: [_jsxs("h4", { children: ["\uCD5C\uADFC \uAE30\uC5B5 (", obs.length, ")"] }), _jsx("div", { className: "meta", style: { marginBottom: 6 }, children: "\uC704 = \uAC00\uC7A5 \uCD5C\uADFC, \uC544\uB798 = \uC624\uB798\uB428" }), obs.length === 0 && _jsx("div", { className: "empty", children: "\uC544\uC9C1 \uAE30\uC5B5\uC774 \uBAA8\uC774\uC9C0 \uC54A\uC558\uC5B4\uC694." }), _jsx("ul", { className: "memories", children: obs.slice().sort((a, b) => (b.tick - a.tick) || (b.timestamp - a.timestamp)).map((o) => (_jsxs("li", { className: `mem kind-${o.kind}`, children: [_jsx("span", { className: "mem-icon", children: memIcon(o.kind) }), _jsx("span", { className: "mem-text", children: o.text }), _jsxs("span", { className: "mem-tick", children: ["tick ", o.tick] })] }, o.id))) })] })), tab === "now" && soul && !editing && (_jsxs("div", { className: "acard", children: [_jsx("h4", { children: "\uC774\uC57C\uAE30 (soul)" }), _jsx("p", { children: soul.backstory }), _jsxs("div", { className: "meta", style: { marginTop: 8 }, children: ["\uC131\uACA9: ", soul.persona] }), _jsxs("div", { className: "meta", children: ["\uC5B4\uC870: ", soul.tone] }), soul.goals.length > 0 && (_jsxs(_Fragment, { children: [_jsx("div", { style: { marginTop: 10, fontSize: 11, color: "var(--text3)", fontWeight: 600 }, children: "\uC624\uB298\uC758 \uBAA9\uD45C" }), _jsx("ul", { children: soul.goals.map((g, i) => _jsx("li", { children: g }, i)) })] })), _jsx("button", { className: "ghost-btn", style: { marginTop: 10 }, onClick: startEdit, children: "\uC601\uD63C \uD3B8\uC9D1" })] })), tab === "now" && editing && draft && (_jsxs("div", { className: "acard", children: [_jsx("h4", { children: "\uC601\uD63C \uD3B8\uC9D1" }), _jsxs("div", { className: "form-row", children: [_jsx("label", { children: "\uBF08\uB300 \uC774\uC57C\uAE30" }), _jsx("textarea", { rows: 3, value: draft.backstory, onChange: (e) => setDraft({ ...draft, backstory: e.target.value }) })] }), _jsxs("div", { className: "form-row", children: [_jsx("label", { children: "\uC131\uACA9" }), _jsx("input", { value: draft.persona, onChange: (e) => setDraft({ ...draft, persona: e.target.value }) })] }), _jsxs("div", { className: "form-row", children: [_jsx("label", { children: "\uC5B4\uC870" }), _jsx("input", { value: draft.tone, onChange: (e) => setDraft({ ...draft, tone: e.target.value }) })] }), _jsxs("div", { className: "form-row", children: [_jsx("label", { children: "\uBAA9\uD45C (\uC27C\uD45C \uAD6C\uBD84)" }), _jsx("input", { value: draft.goals.join(", "), onChange: (e) => setDraft({ ...draft, goals: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) }) })] }), _jsxs("div", { style: { display: "flex", gap: 8, justifyContent: "flex-end" }, children: [_jsx("button", { className: "ghost-btn", onClick: () => setEditing(false), children: "\uCDE8\uC18C" }), _jsx("button", { className: "primary-btn", onClick: saveEdit, children: "\uC800\uC7A5" })] })] })), tab === "now" && thought && (_jsxs("div", { className: "acard", children: [_jsx("h4", { children: "\uC624\uB298\uC758 \uC0DD\uAC01" }), _jsx("p", { children: thought.priority }), _jsxs("div", { className: "meta", children: ["\uAE30\uBD84: ", thought.emotion, " \u00B7 \uB2E4\uC74C \uD589\uB3D9: ", thought.nextIntent] }), thought.beliefs.length > 0 && (_jsxs(_Fragment, { children: [_jsx("div", { style: { marginTop: 10, fontSize: 11, color: "var(--text3)", fontWeight: 600 }, children: "\uC9C0\uAE08 \uBBFF\uACE0 \uC788\uB294 \uAC83" }), _jsx("ul", { children: thought.beliefs.slice(-5).map((b, i) => _jsx("li", { children: b }, i)) })] })), thought.recentEvents.length > 0 && (_jsxs(_Fragment, { children: [_jsx("div", { style: { marginTop: 10, fontSize: 11, color: "var(--text3)", fontWeight: 600 }, children: "\uCD5C\uADFC \uBCF8 \uAC83" }), _jsx("ul", { children: thought.recentEvents.slice(-5).map((e, i) => _jsx("li", { children: e }, i)) })] }))] })), actor.kind !== "monster" && actor.alive && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "acard", style: { borderColor: soul?.isFollower ? "#d97a4b" : undefined, borderWidth: soul?.isFollower ? 2 : 1, borderStyle: "solid" }, children: [_jsxs("h4", { style: { display: "flex", alignItems: "center", gap: 6 }, children: [soul?.isFollower ? "⚡" : "✨", " \uC0AC\uB3C4 \uC784\uBA85", soul?.isFollower && _jsxs("span", { style: { fontSize: 11, color: "var(--accent)", marginLeft: "auto" }, children: ["faith ", (soul.faith ?? 0).toFixed(2)] })] }), _jsx("p", { className: "meta", style: { fontSize: 12, lineHeight: 1.5 }, children: soul?.isFollower
+                                    ? `${actor.name}은(는) 너의 사도. 신탁은 절대 우선으로 따른다.`
+                                    : `${actor.name}을(를) 사도로 임명하면 너의 신탁이 ${actor.name}의 행동·기억·신앙을 직접 빚는다.` }), _jsx("button", { className: soul?.isFollower ? "ghost-btn" : "primary-btn", style: { marginTop: 8 }, onClick: () => void toggleFollower(!soul?.isFollower), children: soul?.isFollower ? "사도 해제" : "사도로 임명" })] }), soul?.isFollower && (_jsxs("div", { className: "acard", style: { background: "linear-gradient(180deg, rgba(217,122,75,0.06), transparent)" }, children: [_jsxs("h4", { children: ["\u26A1 ", actor.name, "\uC5D0\uAC8C \uC2E0\uD0C1 \uB0B4\uB9AC\uAE30"] }), _jsx("textarea", { rows: 2, value: oracleDraft, onChange: (e) => setOracleDraft(e.target.value), onKeyDown: (e) => {
+                                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                                        e.preventDefault();
+                                        void sendOracle();
+                                    }
+                                }, placeholder: `신의 음성을 적어주세요. ${actor.name}은(는) 즉시 따릅니다.`, style: {
+                                    width: "100%", boxSizing: "border-box", padding: 8,
+                                    border: "1px solid var(--accent)", borderRadius: 8,
+                                    fontSize: 12, fontFamily: "inherit", background: "var(--surface)",
+                                    color: "var(--ink)", resize: "vertical"
+                                } }), _jsxs("div", { style: { display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", marginTop: 6 }, children: [_jsx("span", { className: "meta", style: { fontSize: 11, color: oracleStatus === "error" ? "var(--stop)" : "var(--text3)" }, children: oracleStatus === "sending" ? "신탁이 내려가는 중…"
+                                            : oracleStatus === "sent" ? "✨ 신탁이 영혼에 새겨졌어요."
+                                                : oracleStatus === "error" ? "전달 실패"
+                                                    : "Cmd/Ctrl + Enter 로 즉시 신탁" }), _jsx("button", { className: "primary-btn", disabled: !oracleDraft.trim() || oracleStatus === "sending", onClick: () => void sendOracle(), children: "\u26A1 \uC2E0\uD0C1" })] })] })), _jsxs("div", { className: "acard", children: [_jsxs("h4", { children: ["\uD83D\uDCAC ", actor.name, "\uC5D0\uAC8C \uB9D0 \uAC78\uAE30"] }), _jsx("textarea", { rows: 2, value: speakDraft, onChange: (e) => setSpeakDraft(e.target.value), onKeyDown: (e) => {
+                                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                                        e.preventDefault();
+                                        void sendSpeak();
+                                    }
+                                }, placeholder: soul?.isFollower
+                                    ? `사도가 아닌 일반 대화. 신탁만큼 강하지는 않아요.`
+                                    : `${actor.name}이(가) 이 말을 다음 박자 결정에 참고해요.`, style: {
+                                    width: "100%", boxSizing: "border-box", padding: 8,
+                                    border: "1px solid var(--line)", borderRadius: 8,
+                                    fontSize: 12, fontFamily: "inherit", background: "var(--surface)",
+                                    color: "var(--ink)", resize: "vertical"
+                                } }), _jsxs("div", { style: { display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", marginTop: 6 }, children: [_jsx("span", { className: "meta", style: { fontSize: 11 }, children: speakStatus === "sending" ? "보내는 중…" : speakStatus === "sent" ? "전달했어요." : "Cmd/Ctrl + Enter 로 전송" }), _jsx("button", { className: "primary-btn", disabled: !speakDraft.trim() || speakStatus !== "idle", onClick: () => void sendSpeak(), children: "\uBCF4\uB0B4\uAE30" })] })] })] })), _jsxs("div", { className: "acard", children: [_jsx("h4", { children: "\uC0C1\uD0DC" }), _jsx(Bar, { label: "HP", cur: actor.hp, max: actor.maxHp, color: "#3fb950" }), _jsx(Bar, { label: "MP", cur: actor.mp, max: actor.maxMp, color: "#58a6ff" }), _jsx(Bar, { label: "STM", cur: actor.stamina, max: actor.maxStamina, color: "#d29922" }), _jsx(Bar, { label: "HGR", cur: actor.hunger, max: 100, color: "#e94560", reverse: true }), _jsxs("div", { className: "meta", style: { marginTop: 4 }, children: ["\uD83D\uDCB0 ", actor.gold, " gold"] })] }), _jsxs("div", { className: "acard", children: [_jsx("h4", { children: "\uB2A5\uB825\uCE58" }), (() => {
+                        const s = actor.status;
+                        if (!s)
+                            return _jsx("div", { className: "meta", children: "\u2014" });
+                        return (_jsxs("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }, children: [_jsxs("div", { className: "meta", children: ["\uD798 STR ", s.strength] }), _jsxs("div", { className: "meta", children: ["\uBBFC\uCCA9 DEX ", s.dexterity] }), _jsxs("div", { className: "meta", children: ["\uCCB4\uB825 CON ", s.constitution] }), _jsxs("div", { className: "meta", children: ["\uC9C0\uB2A5 INT ", s.intelligence] })] }));
+                    })()] }), _jsxs("div", { className: "acard", children: [_jsxs("h4", { children: ["\uC219\uB828 (", (actor.skills ?? []).length, ")"] }), (actor.skills ?? []).length === 0 && _jsx("div", { className: "meta", children: "\u2014" }), (actor.skills ?? []).map((sk) => {
+                        const TH = [0, 10, 30, 80, 200, 500, 1200, 3000, 7000, 15000, 30000];
+                        const xp = sk.xp ?? 0;
+                        const prev = TH[sk.level] ?? 0;
+                        const next = TH[Math.min(sk.level + 1, TH.length - 1)];
+                        const pct = next > prev ? Math.max(0, Math.min(100, ((xp - prev) / (next - prev)) * 100)) : 0;
+                        return (_jsxs("div", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, padding: "2px 0" }, title: sk.description, children: [_jsx("span", { style: { minWidth: 64 }, children: sk.name }), _jsx("div", { style: { flex: 1, height: 5, background: "var(--surface3)", borderRadius: 3, overflow: "hidden" }, children: _jsx("div", { style: { width: `${pct}%`, height: "100%", background: sk.level > 0 ? "var(--accent3)" : "var(--text3)" } }) }), _jsxs("span", { style: { fontSize: 10, color: "var(--text3)", minWidth: 70, textAlign: "right" }, children: ["lv", sk.level, " ", xp, "/", next] })] }, sk.id));
+                    })] }), _jsxs("div", { className: "acard", children: [_jsxs("h4", { children: ["\uC18C\uC9C0\uD488 (", actor.inventory.length, "/8)"] }), actor.inventory.length === 0 ? (_jsx("div", { className: "meta", children: "\uBE44\uC5B4 \uC788\uC74C" })) : (_jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 4 }, children: actor.inventory.map((id) => (_jsx("span", { style: { fontSize: 10, padding: "2px 6px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 4 }, children: id }, id))) }))] })] }));
+}
+function Bar({ label, cur, max, color, reverse }) {
+    const pct = max > 0 ? Math.max(0, Math.min(100, (cur / max) * 100)) : 0;
+    const bar = reverse ? pct : pct;
+    return (_jsxs("div", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, padding: "2px 0" }, children: [_jsx("span", { style: { minWidth: 32, color: "var(--text2)" }, children: label }), _jsx("div", { style: { flex: 1, height: 6, background: "var(--surface3)", borderRadius: 3, overflow: "hidden" }, children: _jsx("div", { style: { width: `${bar}%`, height: "100%", background: color } }) }), _jsxs("span", { style: { fontSize: 10, color: "var(--text3)", minWidth: 50, textAlign: "right" }, children: [Math.round(cur), "/", max] })] }));
+}
+function memIcon(kind) {
+    switch (kind) {
+        case "perceive": return "👁";
+        case "action": return "🚶";
+        case "dialogue": return "💬";
+        case "reflection": return "🪞";
+        case "memory": return "📎";
+        default: return "·";
+    }
+}

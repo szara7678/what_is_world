@@ -1,4 +1,5 @@
 import type { Actor, WorldState } from "@wiw/shared";
+import { createDefaultSkills } from "@wiw/world-core";
 
 const id = (prefix: string): string => `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -10,6 +11,10 @@ export const spawnActor = (
   y: number,
   assetKey?: string
 ): Actor => {
+  const status = kind === "monster"
+    ? { strength: 5, dexterity: 5, constitution: 5, intelligence: 1 }
+    : { strength: 5, dexterity: 5, constitution: 5, intelligence: 5 };
+  const maxStamina = 50 + status.constitution * 5;
   const actor: Actor = {
     id: id(kind),
     kind,
@@ -21,9 +26,11 @@ export const spawnActor = (
     maxHp: 100,
     mp: 20,
     maxMp: 20,
-    stamina: 100,
-    maxStamina: 100,
+    stamina: maxStamina,
+    maxStamina,
     hunger: 0,
+    status,
+    skills: createDefaultSkills(),
     gold: 0,
     inventory: [],
     alive: true

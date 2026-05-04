@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { assetCatalog as manualCatalog } from "./assetCatalog";
 
 type AssetEntry = { key: string; path: string };
 type AssetCatalog = {
@@ -13,6 +14,8 @@ type AssetCatalog = {
 const root = resolve(process.cwd(), "../../assets");
 
 const toWebPath = (filePath: string): string => `/static/${relative(root, filePath).replaceAll("\\", "/")}`;
+
+const manualToWebPath = (path: string): string => path.replace(/^\/assets\//, "/static/");
 
 const toKey = (prefix: string, filePath: string): string => {
   const base = relative(root, filePath).replaceAll("\\", "/").replace(".png", "");
@@ -28,6 +31,22 @@ const walk = async (dir: string, acc: string[]): Promise<void> => {
   }
 };
 
+const mergeManual = (auto: AssetEntry[], manual: AssetEntry[]): AssetEntry[] => {
+  const seen = new Set<string>();
+  const out: AssetEntry[] = [];
+  for (const m of manual) {
+    if (seen.has(m.key)) continue;
+    seen.add(m.key);
+    out.push({ key: m.key, path: manualToWebPath(m.path) });
+  }
+  for (const a of auto) {
+    if (seen.has(a.key)) continue;
+    seen.add(a.key);
+    out.push(a);
+  }
+  return out;
+};
+
 export const scanAssets = async (): Promise<AssetCatalog> => {
   const pngs: string[] = [];
   await walk(root, pngs);
@@ -38,10 +57,10 @@ export const scanAssets = async (): Promise<AssetCatalog> => {
       .map((p) => ({ key: toKey(prefix, p), path: toWebPath(p) }));
 
   return {
-    tileSets: pick("/tile/", "tile"),
-    humans: pick("/character/human/", "human"),
-    animals: pick("/character/animal/", "animal"),
-    items: pick("/item/", "item"),
-    objects: pick("/object/", "object")
+    tileSets: mergeManual(pick("/tile/", "tile"), manualCatalog.tileSets),
+    humans: mergeManual(pick("/character/human/", "human"), manualCatalog.humans),
+    animals: mergeManual(pick("/character/animal/", "animal"), manualCatalog.animals),
+    items: mergeManual(pick("/item/", "item"), manualCatalog.items),
+    objects: mergeManual(pick("/object/", "object"), manualCatalog.objects)
   };
 };
