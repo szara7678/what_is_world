@@ -724,15 +724,21 @@ class WorldScene extends Phaser.Scene {
 
     this.input.on("wheel", (_p: Phaser.Input.Pointer, _gx: number, _gy: number, dY: number) => {
       const cam = this.cameras.main;
-      // 휠 줌은 cursor 기준 → followPlayerCamera 가 켜져 있으면 다음 프레임에 lerp 가
-      // scroll 을 player 위치로 되돌려서 "중앙 기준으로 줌되는" 인상을 줌. 해제.
+      // 휠 줌은 cursor 기준 — followPlayerCamera 가 켜져 있으면 다음 프레임 lerp 가 덮어쓰므로 해제.
       this.followPlayerCamera = false;
-      const wp  = cam.getWorldPoint(_p.x, _p.y);
-      const nz  = Phaser.Math.Clamp(cam.zoom * (dY > 0 ? 0.88 : 1.12), 0.25, 8);
-      cam.setZoom(nz);
-      const wp2 = cam.getWorldPoint(_p.x, _p.y);
-      cam.scrollX -= wp2.x - wp.x;
-      cam.scrollY -= wp2.y - wp.y;
+      const oldZoom = cam.zoom;
+      const newZoom = Phaser.Math.Clamp(oldZoom * (dY > 0 ? 0.88 : 1.12), 0.25, 8);
+      if (newZoom === oldZoom) return;
+      // Phaser 3.x cursor-anchored zoom canonical formula. getWorldPoint 은 origin/bounds 와
+      // 상호작용 에지 케이스에서 좌상단 anchor 처럼 보이는 결과를 줘서 명시적 산수로 변경.
+      // viewport offset (cam.x, cam.y) 도 반영.
+      const viewportX = _p.x - cam.x;
+      const viewportY = _p.y - cam.y;
+      const worldX = cam.scrollX + viewportX / oldZoom;
+      const worldY = cam.scrollY + viewportY / oldZoom;
+      cam.setZoom(newZoom);
+      cam.scrollX = worldX - viewportX / newZoom;
+      cam.scrollY = worldY - viewportY / newZoom;
     });
   }
 
