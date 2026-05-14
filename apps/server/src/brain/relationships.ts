@@ -96,13 +96,13 @@ async function recordRelationshipThreshold(b: Bump, before: number, after: numbe
   const world = getWorld();
   const fromName = world.actors[b.from]?.name ?? b.from;
   const toName = world.actors[b.to]?.name ?? b.to;
-  const label = becameFriend ? "친구" : "원수";
+  const label = becameFriend ? "friends" : "enemies";
   await recordHistory({
     tick: b.tick,
     ts: Date.now(),
     actorId: b.from,
     kind: becameFriend ? "relationship.friend" : "relationship.enemy",
-    text: `${fromName} 와 ${toName} 가 ${label}가 되었어요.`,
+    text: `${fromName} and ${toName} have become ${label}.`,
     meta: { from: b.from, to: b.to, affinity: after, note: b.note }
   });
 }

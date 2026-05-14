@@ -158,17 +158,17 @@ function parseLlmJson(text: string): LlmPage | null {
   }
 }
 
-const INSTRUCTIONS = `너는 작은 마을의 기록자다. 어제 마을에서 실제로 일어난 사건 목록을 받아, 그날 하루를 짧은 일기 (한국어 2-3문단) 로 옮긴다.
+const INSTRUCTIONS = `You are the chronicler of a small village. You receive a list of events that actually happened yesterday and turn them into a short diary entry in English (2-3 paragraphs).
 
-규칙:
-- 사실 외에는 새 사건을 만들지 마라. 입력에 없는 인물·물건·장소를 등장시키지 마라.
-- NPC 의 내면은 상상하지 말고, 실제 행동·대화·결과만 묘사해라.
-- 어조는 따뜻하고 담백한 단편 소설 톤. 마을 기록자의 1인칭 또는 관찰자 시점.
-- title 은 그날을 한 문장으로 요약 (예: "햇살이 늦게 든 아침").
-- quotes 는 입력에 직접 등장한 짧은 말 1-2개. 입력에 없는 대사 만들지 마라.
+Rules:
+- Do not invent events that are not in the input. Do not introduce people, items, or places not listed.
+- Do not imagine NPC inner thoughts. Describe only their real actions, dialogue, and outcomes.
+- Tone: warm and grounded short-story prose, first person of the chronicler or quiet observer.
+- title is one sentence summarizing the day (e.g. "A morning the sun arrived late").
+- quotes are 1-2 short lines that appeared directly in the input. Never invent dialogue.
 
-JSON 한 개로만 출력한다:
-{"title":"...","body":"2-3문단 일기","quotes":["...","..."]}`;
+Output one JSON object only:
+{"title":"...","body":"2-3 paragraph diary in English","quotes":["...","..."]}`;
 
 interface BuildOptions {
   dayIndex: number;
@@ -195,24 +195,24 @@ async function buildPage(opts: BuildOptions): Promise<ChroniclePage | null> {
   }
 
   const lines: string[] = [];
-  lines.push(`# 어제(day ${opts.dayIndex}) 마을 사람들`);
+  lines.push(`# Yesterday (day ${opts.dayIndex}) — villagers`);
   for (const s of opts.souls.slice(0, 8)) lines.push(`- ${s.name}${s.persona ? ` (${s.persona.slice(0, 30)})` : ""}`);
   lines.push("");
-  lines.push(`# 어제 일어난 일 (tick ${opts.startTick}~${opts.endTick})`);
-  if (milestones.length === 0) lines.push("- (큰 사건 없음)");
+  lines.push(`# What happened yesterday (tick ${opts.startTick}~${opts.endTick})`);
+  if (milestones.length === 0) lines.push("- (no major events)");
   for (const m of milestones) lines.push(`- [tick ${m.tick}] ${m.kind}: ${m.text}${m.actorId ? ` (${m.actorId})` : ""}`);
   if (dialogue.length) {
     lines.push("");
-    lines.push("# 어제 들린 말들");
+    lines.push("# Things people said");
     for (const d of dialogue) lines.push(`- [tick ${d.tick}] ${d.actorId}: ${d.text}`);
   }
   if (lessonObs.length) {
     lines.push("");
-    lines.push("# 어제 마을이 배운 것");
+    lines.push("# What the village learned");
     for (const o of lessonObs) lines.push(`- [tick ${o.tick}] ${o.actorId}: ${o.text}`);
   }
   lines.push("");
-  lines.push("위 사건들을 짧은 일기 (한국어 2-3문단) 로 옮겨라. JSON 한 개만 출력.");
+  lines.push("Turn the events above into a short diary entry in English (2-3 paragraphs). Output one JSON object only.");
 
   const userText = lines.join("\n");
   const raw = await callChatgptResponses(opts.model, INSTRUCTIONS, userText);

@@ -520,7 +520,7 @@ function AgentDetail({ actor, soul, thought, onSoulUpdate, selectedId, adminMode
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Soul | null>(null);
-  const [tab, setTab] = useState<"now" | "memories">("now");
+  const [tab, setTab] = useState<"status" | "memories" | "persona">("status");
   const obs = useObservations(selectedId, 60);
 
   const [speakDraft, setSpeakDraft] = useState("");
@@ -589,27 +589,46 @@ function AgentDetail({ actor, soul, thought, onSoulUpdate, selectedId, adminMode
   return (
     <>
       <div className="acard">
-        <h4>Current soul</h4>
-        <p style={{ fontWeight: 600, fontSize: 15 }}>{displayActorName(actor)}</p>
+        <h4>{displayActorName(actor)}</h4>
         <div className="meta">{actor.kind} · ({actor.x}, {actor.y})</div>
         <div className="mode-seg" style={{ marginTop: 10 }}>
-          <button className={tab === "now" ? "active" : ""} onClick={() => setTab("now")}>Now</button>
-          <button className={tab === "memories" ? "active" : ""} onClick={() => setTab("memories")}>Recent memories</button>
+          <button className={tab === "status" ? "active" : ""} onClick={() => setTab("status")}>Status</button>
+          <button className={tab === "memories" ? "active" : ""} onClick={() => setTab("memories")}>Memories</button>
+          <button className={tab === "persona" ? "active" : ""} onClick={() => setTab("persona")}>Persona</button>
         </div>
       </div>
 
-      <div className="acard">
-        <h4>Current action</h4>
-        <div style={{ fontSize: 12, lineHeight: 1.6, color: "var(--text2)" }}>
-          {currentActionLines(actor).map((line, i) => (
-            <div key={i}>{line}</div>
-          ))}
-        </div>
-      </div>
+      {/* STATUS tab — body, current action, today's thought */}
+      {tab === "status" && (
+        <>
+          <div className="acard">
+            <h4>Current action</h4>
+            <div style={{ fontSize: 12, lineHeight: 1.6, color: "var(--text2)" }}>
+              {currentActionLines(actor).map((line, i) => (
+                <div key={i}>{line}</div>
+              ))}
+            </div>
+          </div>
+          {thought && (
+            <div className="acard">
+              <h4>What they are thinking</h4>
+              <p>{thought.priority}</p>
+              <div className="meta">Mood: {thought.emotion} · Next: {thought.nextIntent}</div>
+              {thought.beliefs.length > 0 && (
+                <>
+                  <div style={{ marginTop: 10, fontSize: 11, color: "var(--text3)", fontWeight: 600 }}>Current beliefs</div>
+                  <ul>{thought.beliefs.slice(-5).map((b, i) => <li key={i}>{b}</li>)}</ul>
+                </>
+              )}
+            </div>
+          )}
+        </>
+      )}
 
+      {/* MEMORIES tab — full observation list (recent first) */}
       {tab === "memories" && (
         <div className="acard">
-          <h4>Recent memories ({obs.length})</h4>
+          <h4>Memories ({obs.length})</h4>
           <div className="meta" style={{ marginBottom: 6 }}>top = newest, bottom = older</div>
           {obs.length === 0 && <div className="empty">No memories collected yet.</div>}
           <ul className="memories">
@@ -624,23 +643,43 @@ function AgentDetail({ actor, soul, thought, onSoulUpdate, selectedId, adminMode
         </div>
       )}
 
-      {tab === "now" && soul && !editing && (
-        <div className="acard">
-          <h4>Story (soul)</h4>
-          <p>{soul.backstory}</p>
-          <div className="meta" style={{ marginTop: 8 }}>Persona: {soul.persona}</div>
-          <div className="meta">Tone: {soul.tone}</div>
-          {soul.goals.length > 0 && (
-            <>
-              <div style={{ marginTop: 10, fontSize: 11, color: "var(--text3)", fontWeight: 600 }}>Today's goals</div>
-              <ul>{soul.goals.map((g, i) => <li key={i}>{g}</li>)}</ul>
-            </>
-          )}
-          {adminMode && <button className="ghost-btn" style={{ marginTop: 10 }} onClick={startEdit}>Edit soul</button>}
-        </div>
+      {/* PERSONA tab — backstory, persona, tone, goals, selfNarrative, lifeEvents */}
+      {tab === "persona" && soul && !editing && (
+        <>
+          <div className="acard">
+            <h4>Who they are</h4>
+            <p>{soul.backstory}</p>
+            <div className="meta" style={{ marginTop: 8 }}>Persona: {soul.persona}</div>
+            <div className="meta">Tone: {soul.tone}</div>
+            {soul.selfNarrative?.text && (
+              <div style={{ marginTop: 10, fontSize: 12, fontStyle: "italic", color: "var(--text2)" }}>
+                Lately: {soul.selfNarrative.text}
+              </div>
+            )}
+            {soul.values?.length > 0 && (
+              <>
+                <div style={{ marginTop: 10, fontSize: 11, color: "var(--text3)", fontWeight: 600 }}>Values</div>
+                <div className="meta" style={{ fontSize: 12 }}>{soul.values.join(", ")}</div>
+              </>
+            )}
+            {soul.goals.length > 0 && (
+              <>
+                <div style={{ marginTop: 10, fontSize: 11, color: "var(--text3)", fontWeight: 600 }}>Today's goals</div>
+                <ul>{soul.goals.map((g, i) => <li key={i}>{g}</li>)}</ul>
+              </>
+            )}
+            {soul.lifeEvents && soul.lifeEvents.length > 0 && (
+              <>
+                <div style={{ marginTop: 10, fontSize: 11, color: "var(--text3)", fontWeight: 600 }}>Life events</div>
+                <ul>{soul.lifeEvents.slice(-5).map((e, i) => <li key={i}><span className="meta">[t{e.tick}]</span> {e.text}</li>)}</ul>
+              </>
+            )}
+            {adminMode && <button className="ghost-btn" style={{ marginTop: 10 }} onClick={startEdit}>Edit soul</button>}
+          </div>
+        </>
       )}
 
-      {tab === "now" && adminMode && editing && draft && (
+      {tab === "persona" && adminMode && editing && draft && (
         <div className="acard">
           <h4>Edit soul</h4>
           <div className="form-row">
@@ -666,26 +705,6 @@ function AgentDetail({ actor, soul, thought, onSoulUpdate, selectedId, adminMode
             <button className="ghost-btn" onClick={() => setEditing(false)}>Cancel</button>
             <button className="primary-btn" onClick={saveEdit}>Save</button>
           </div>
-        </div>
-      )}
-
-      {tab === "now" && thought && (
-        <div className="acard">
-          <h4>Today's thoughts</h4>
-          <p>{thought.priority}</p>
-          <div className="meta">Mood: {thought.emotion} · Next action: {thought.nextIntent}</div>
-          {thought.beliefs.length > 0 && (
-            <>
-              <div style={{ marginTop: 10, fontSize: 11, color: "var(--text3)", fontWeight: 600 }}>Current beliefs</div>
-              <ul>{thought.beliefs.slice(-5).map((b, i) => <li key={i}>{b}</li>)}</ul>
-            </>
-          )}
-          {thought.recentEvents.length > 0 && (
-            <>
-              <div style={{ marginTop: 10, fontSize: 11, color: "var(--text3)", fontWeight: 600 }}>Recent observations</div>
-              <ul>{thought.recentEvents.slice(-5).map((e, i) => <li key={i}>{e}</li>)}</ul>
-            </>
-          )}
         </div>
       )}
 

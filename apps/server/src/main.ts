@@ -118,7 +118,7 @@ function startServerTick(): void {
         tick: world.tick,
         ts: Date.now(),
         kind: "day.rollover",
-        text: `새 하루가 시작되었어요. tick ${world.tick}`,
+        text: `A new day begins at tick ${world.tick}.`,
         meta: { previousTimeOfDay: beforeTime, timeOfDay: world.timeOfDay }
       });
     }
@@ -131,7 +131,7 @@ function startServerTick(): void {
           ts: Date.now(),
           actorId: actor.id,
           kind: "actor.death",
-          text: `${actor.name} 이(가) 쓰러졌어요.`,
+          text: `${actor.name} fell.`,
           meta: { actorId: actor.id }
         });
         if (actor.kind !== "monster") {
@@ -174,7 +174,7 @@ function startServerTick(): void {
             ts: Date.now(),
             actorId: victim.id,
             kind: "threat.detected",
-            text: `${monster.name}이(가) ${victim.name}에게 다가갔어요.`,
+            text: `${monster.name} closed in on ${victim.name}.`,
             meta: { monsterId: monster.id, victimId: victim.id }
           });
         }
@@ -1220,7 +1220,7 @@ fastify.post<{ Params: { id: string }; Body: { message: string; from?: string } 
       tick: world.tick,
       timestamp: Date.now(),
       kind: "dialogue",
-      text: `${fromLabel}이(가) 나에게 "${text}"라고 말했다.`,
+      text: `${fromLabel} said to me: "${text}"`,
       tags: ["dialogue", "visitor"],
       importance: 0.85
     };
