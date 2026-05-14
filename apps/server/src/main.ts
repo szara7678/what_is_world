@@ -178,11 +178,30 @@ function startServerTick(): void {
   }, 100);
 }
 
+// Codex 2차 quick win: trade_settled (and other lifecycle events) seen multiple times in events.ndjson
+// for the same tradeId — stale-world replay was emitting duplicates. Track recently-seen idempotency
+// keys for the trade lifecycle events here so we drop replays at the drain edge.
+const recentSettledKeys = new Map<string, number>();
+const SETTLED_DEDUP_TTL_MS = 30_000;
+
 function drainWorldEventQueue(world: ReturnType<typeof getWorld>): void {
   const queue = world.eventQueue ?? [];
   if (queue.length === 0) return;
   world.eventQueue = [];
+  const now = Date.now();
+  for (const [key, ts] of recentSettledKeys) {
+    if (now - ts > SETTLED_DEDUP_TTL_MS) recentSettledKeys.delete(key);
+  }
   for (const event of queue) {
+    const isTradeLifecycle = event.type === "trade_settled" || event.type === "trade:accepted" || event.type === "trade:rejected";
+    if (isTradeLifecycle) {
+      const tradeId = String(event.payload?.tradeId ?? "");
+      if (tradeId) {
+        const key = `${event.type}:${tradeId}`;
+        if (recentSettledKeys.has(key)) continue;
+        recentSettledKeys.set(key, now);
+      }
+    }
     void appendRawEvent({
       tick: event.tick,
       timestamp: Date.now(),

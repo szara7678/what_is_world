@@ -893,6 +893,12 @@ export const dispatchAction = (world: WorldState, request: ActionRequest): Actio
   if (!actor || !actor.alive) return { ok: false, message: "actor_not_found" };
   world.context ??= createDefaultWorldContext(world.tick);
   if (actor.pendingUse && request.action.type !== "WAIT" && !continuesPendingUse(request.action, actor.pendingUse)) {
+    // Codex 2차 quick win: pendingUse 활성 + MOVE 요청 + movePath 아직 남아있으면 abort 대신 WAIT 처리.
+    // pendingUse가 같은 station을 향해 자동 이동 중일 가능성 — MOVE는 그 자동 흐름을 깨는 의미 없는 재명령.
+    // prompt가 이런 상황에 "WAIT으로 계속하라"고 안내하므로 code도 동일하게 행동.
+    if (request.action.type === "MOVE" && actor.movePath && actor.movePath.length > 0) {
+      return { ok: true, message: "pending_use_in_progress:move_ignored" };
+    }
     abortPendingUseForAction(world, actor, actor.pendingUse, request.action);
   }
   if (actor.sleeping && request.action.type !== "SLEEP" && request.action.type !== "WAIT") {

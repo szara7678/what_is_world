@@ -383,9 +383,12 @@ async function applyReflection(me: Actor, soul: Soul, r: ReflectionResult, provi
   const newGoal = normalizeIdentityGoal(r.newGoal, new Set());
   if (newGoal && newGoal.evidence.length >= 2 && distinct(newGoal.evidence).length >= 2) {
     const fresh = backfillIdentitySeeds(await readSoul(me.id, me.name));
+    const goalEvidenceInfo = await readEvidenceTagInfo(me.id, newGoal.evidence);
+    const failureOnly = evidenceIsFailureOnly(goalEvidenceInfo);
     if (
       world.tick - (fresh.lastGoalsDriftTick ?? -Infinity) >= 2880 &&
-      isGoalGrounded(newGoal.text, me, fresh, world)
+      isGoalGrounded(newGoal.text, me, fresh, world) &&
+      !failureOnly
     ) {
       const beforeGoals = fresh.goals ?? [];
       const normalized = normalizeIdentityText(newGoal.text, 120);
@@ -776,6 +779,22 @@ async function readEvidenceTagInfo(actorId: string, evidence: string[]): Promise
 
 function hasMilestoneTagFromInfo(info: EvidenceTagInfo[]): boolean {
   return info.some((obs) => obs.tags.some((tag) => tag.startsWith("milestone:")));
+}
+
+/**
+ * Codex 2차/3차 권고: identity_shift goal 승격이 "실패-only evidence" 위에서 일어나면 위험.
+ * 예) alchemy_table 실패만 6번 → newGoal "Use alchemy table to make herb" 승격.
+ * 한 evidence라도 success/positive 행동/관찰을 갖고 있어야 newGoal 승격 허용.
+ */
+const FAILURE_ONLY_TAGS = new Set([
+  "failure_fact", "confirmed_invalid", "use:aborted", "use:timeout",
+  "trade:expired", "trade:rejected", "path_unreachable", "blocked_tile", "blocked_actor"
+]);
+function evidenceIsFailureOnly(info: EvidenceTagInfo[]): boolean {
+  if (info.length === 0) return true;
+  return info.every((obs) =>
+    obs.tags.some((tag) => FAILURE_ONLY_TAGS.has(tag) || tag.startsWith("fail:"))
+  );
 }
 
 function anyEvidenceObsTagsInFromInfo(info: EvidenceTagInfo[], tags: Set<string>): boolean {
