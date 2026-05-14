@@ -26,9 +26,9 @@ type SpawnZone = { placeId: string; entries: SpawnKind[]; nightOnly?: boolean; w
 // 2026-05-09 v4: 번식 — 같은 종 ≥2 인접 (4타일) 마다 작은 확률로 새끼 spawn.
 // floor 보다 위에서도 자연 증가. CAP 으로 폭발 방지.
 const BREEDING_CHECK_INTERVAL = 60;     // ~1분 wallclock
-const BREEDING_PAIR_CHANCE = 0.08;      // 한 쌍 당 1분 마다 8% (테스트 중 증가 관찰 쉽게)
+const BREEDING_PAIR_CHANCE = 0.03;      // Codex 8차 라이브: 0.08 → 0.03. 누적 번식으로 alpha boar 다수 → NPC 사망 4건 발생.
 const BREEDING_RADIUS = 4;
-const HOSTILE_POPULATION_CAP = 36;       // 살아있는 hostile 최대 (위협 saturate 방지)
+const HOSTILE_POPULATION_CAP = 18;       // 36 → 18. character drift 검증 환경에는 위협 saturate 더 낮게.
 let lastBreedCheckTick = 0;
 const DISCOVER_RESOURCE_RADIUS = 8;
 const DISCOVER_RESOURCE_SCAN_INTERVAL = 10;
@@ -288,9 +288,10 @@ const maybeBreedHostile = (world: WorldState): void => {
         const d = Math.abs(A.x - B.x) + Math.abs(A.y - B.y);
         if (d > BREEDING_RADIUS) continue;
         if (Math.random() >= BREEDING_PAIR_CHANCE) continue;
-        // 새끼 spawn — common 위주 (alpha/dire 자손은 드물게)
+        // 새끼 spawn — common 위주. Codex 8차 라이브: alpha 18% → 6%, dire 2% → 1%.
+        // Passive boar/deer 가 누적 번식하면서 alpha 변이체가 village 침입 → NPC 사망 4건. tier 변이 확률 강제 인하.
         const r = Math.random();
-        const childTier: import("../content/monsters").MonsterTier = r < 0.02 ? 3 : r < 0.18 ? 2 : 1;
+        const childTier: import("../content/monsters").MonsterTier = r < 0.01 ? 3 : r < 0.07 ? 2 : 1;
         const mult = TIER_MULT[childTier];
         const tierSuffix = childTier === 3 ? ".dire" : childTier === 2 ? ".alpha" : "";
         const cx = Math.round((A.x + B.x) / 2);
