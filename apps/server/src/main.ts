@@ -911,6 +911,7 @@ fastify.post<{ Body: { message?: string; restoreActors?: boolean; placeAtHome?: 
     "npc-4":    { x: 44, y: 31 }  // Jin — home-jin
   };
   if (req.body?.restoreActors) {
+    const previouslyDead = new Set(Object.values(w.actors).filter((a) => !a.alive).map((a) => a.id));
     for (const a of Object.values(w.actors)) {
       a.alive = true;
       a.hp = a.maxHp;
@@ -927,6 +928,20 @@ fastify.post<{ Body: { message?: string; restoreActors?: boolean; placeAtHome?: 
         a.y = homeSpawn[a.id].y;
       }
       restored.push(a.id);
+    }
+    // 부활한 actor (이전에 dead 였던) 의 stale agenda 정리: 죽기 전 plan은 더이상 의미 없음.
+    // oracle message가 이미 강한 dialogue observation으로 적립되니, 다음 LLM beat에서 새 agenda 자율 결정.
+    for (const id of previouslyDead) {
+      const a = w.actors[id];
+      if (!a || a.kind === "monster") continue;
+      try {
+        const soul = await readSoul(id, a.name);
+        if (soul.agenda) {
+          await writeSoul({ ...soul, agenda: { ...soul.agenda, status: "abandoned", lastFailureSig: "died_before_completion" }, updatedAt: Date.now() });
+        }
+      } catch {
+        // best-effort
+      }
     }
     w.revision += 1;
   }

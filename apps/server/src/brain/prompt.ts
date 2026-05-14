@@ -1044,7 +1044,6 @@ export function buildUserPrompt(args: {
       ? [agendaLine(soul.agenda, world.tick)]
       : ["- (forming) — your next decision can propose a focused goal via CHANGE"]),
     "",
-    ...formatRecoveryBridge(soul, world.tick),
     ...formatAgendaRecap(thought, world.tick),
     ...formatBeatTimeline(thought, world.tick),
     ...nowLines,
@@ -1085,22 +1084,6 @@ export function buildUserPrompt(args: {
     // B (soft). Late identity recap — Lost-in-the-Middle 보정. directive 아니고 부드러운 한 줄.
     `(You are ${me.name}. Carry your remembered thoughts and chosen reasons with you as you decide this next single beat.)`
   ].join("\n");
-}
-
-/**
- * Codex 5차 권고: hp=0 사망 후 다시 살아난 직후 1-2 prompt에는 기존 agenda를 그대로 따르기보다
- * "recover and reassess" bridge가 더 자연스러움. 사망 후 RECOVERY_BRIDGE_WINDOW_TICKS 안에는 노출.
- */
-const RECOVERY_BRIDGE_WINDOW_TICKS = 40;
-function formatRecoveryBridge(soul: Soul, nowTick: number): string[] {
-  if (typeof soul.lastDeathTick !== "number") return [];
-  const since = nowTick - soul.lastDeathTick;
-  if (since < 0 || since > RECOVERY_BRIDGE_WINDOW_TICKS) return [];
-  return [
-    "# RECOVERY",
-    `You fell ${since} ticks ago and have come back. Your prior agenda may no longer be the right one — start by recovering, looking around, and deciding what matters most now.`,
-    ""
-  ];
 }
 
 /**
