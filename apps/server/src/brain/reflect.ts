@@ -440,15 +440,25 @@ async function applyReflection(me: Actor, soul: Soul, r: ReflectionResult, provi
     }
   }
 
-  // Codex 4차 권고 (H): selfNarrative — 자기 결정·관찰에서 LLM이 1줄로 자기 인식 갱신.
-  // evidence 2개 이상 + 1440 tick (~1일) cooldown + seed persona·values 재진술 차단.
+  // Codex 4차 권고 (H) + 7차 완화: selfNarrative — 자기 결정·관찰에서 LLM이 1줄로 자기 인식 갱신.
+  // evidence 2개 + 1440 tick cooldown + seed/persona/values 재진술 차단.
+  // 7차 완화: evidence가 다양한 categories (action+memory+lesson 등)에 걸쳐 있으면 fail-only도 통과 — 단순 실패 누적도 자기 인식이 될 수 있음.
   const selfNarrative = normalizeSelfNarrative(r.selfNarrative, new Set());
   if (selfNarrative && selfNarrative.evidence.length >= 2 && distinct(selfNarrative.evidence).length >= 2) {
     const fresh = backfillIdentitySeeds(await readSoul(me.id, me.name));
     const text = normalizeIdentityText(selfNarrative.text, 180);
     const cooldownOk = world.tick - (fresh.lastSelfNarrativeTick ?? -Infinity) >= 1440;
     const restatesIdentity = text ? substantivelyRestates(text, [fresh.persona, ...(fresh.values ?? []), ...((fresh.personaShifts ?? []).map((s) => s.text))]) : true;
-    if (text && cooldownOk && !restatesIdentity) {
+    // 추가 게이트 완화: evidence 중 하나 이상이 lifeEvent / agenda lifecycle / relationship_moment / milestone tag 면 통과 (단순 실패 외)
+    const evidenceInfo = await readEvidenceTagInfo(me.id, selfNarrative.evidence);
+    const hasRichEvidence = evidenceInfo.some((obs) =>
+      obs.tags.some((tag) =>
+        tag.startsWith("milestone:") ||
+        tag === "agenda" || tag === "completed" || tag === "abandoned" ||
+        tag === "relationship_moment" || tag === "lesson" || tag === "death"
+      )
+    );
+    if (text && cooldownOk && !restatesIdentity && hasRichEvidence) {
       await writeSoul({
         ...fresh,
         selfNarrative: { text, updatedAtTick: world.tick, evidence: selfNarrative.evidence },

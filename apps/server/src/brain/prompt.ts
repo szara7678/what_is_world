@@ -1095,17 +1095,42 @@ export function buildUserPrompt(args: {
 
 /**
  * F+G merged — Rolling beat timeline surfaces the last few "I felt X, decided Y, did Z because W → result"
- *    rows so the actor's inner-state-to-action through-line is visible in one block instead of two
- *    redundant ones. Codex 4차 권고 #1+#2 합쳐서. Free-form prose, doesn't force schema fields.
- *    Codex 5차 권고: consecutive semantic duplicates (same priority+action.type+reason)는 한 줄로 압축
- *    "[t-A..t-B] ... × N times" 형식. 노이즈 줄이고 진짜 변화는 부각.
+ *    rows. Codex 7차 권고: exact text match는 wording 변화에 약함. semantic bucket으로 바꿈 —
+ *    action.type + outcome family (success/pending/failure family) + primary pressure keyword.
+ *    같은 의미 반복은 "(×N)"으로 압축, wording 변화는 무시.
  */
+function outcomeFamily(result: string | undefined): string {
+  if (!result) return "none";
+  if (result === "success") return "success";
+  if (result === "pending") return "pending";
+  // failure variants normalize to family
+  if (result.startsWith("missing_") || result.includes("inputs_short")) return "fail:missing_input";
+  if (result.startsWith("trade_rejected") || result.startsWith("trade_accept_failed")) return "fail:trade";
+  if (result === "target_dead_or_missing" || result.startsWith("target_")) return "fail:target";
+  if (result.startsWith("blocked_") || result.startsWith("no_path") || result.includes("unreachable")) return "fail:path";
+  if (result.startsWith("pending_use_in_progress")) return "no_op:pending_use";
+  return `fail:other`;
+}
+
+const PRESSURE_KEYWORDS: Array<{ key: string; tags: RegExp }> = [
+  { key: "hunger", tags: /\b(hunger|hungry|starv|food|eat|fed)\b/i },
+  { key: "danger", tags: /\b(wolf|bear|naga|troll|spirit|skeleton|monster|attack|hostile|danger|threat|fight)\b/i },
+  { key: "craft", tags: /\b(oven|forge|workbench|alchemy|station|craft|bake|brew|smith|recipe)\b/i },
+  { key: "social", tags: /\b(Mira|Peter|Lia|Jin|Noah|Aaron|villager|neighbor|trust|share|trade|gift)\b/i },
+  { key: "exhaustion", tags: /\b(tired|sleep|exhaust|stamina|rest)\b/i }
+];
+function primaryPressure(entry: NonNullable<Thought["beatHistory"]>[number]): string {
+  const blob = `${entry.priority} ${entry.nextIntent} ${entry.action?.reason ?? ""}`;
+  for (const p of PRESSURE_KEYWORDS) if (p.tags.test(blob)) return p.key;
+  return "other";
+}
+
 function formatBeatTimeline(thought: Thought, nowTick: number): string[] {
   const history = thought.beatHistory ?? [];
   if (history.length === 0) return [];
   type Entry = NonNullable<Thought["beatHistory"]>[number];
   const rows = history.slice(-5);
-  const sigOf = (e: Entry) => `${e.priority}|${e.action?.type ?? "_"}|${e.action?.reason ?? ""}`;
+  const sigOf = (e: Entry) => `${e.action?.type ?? "no_action"}|${outcomeFamily(e.action?.result)}|${primaryPressure(e)}`;
   const groups: Array<{ entries: Entry[]; sig: string }> = [];
   for (const entry of rows) {
     const sig = sigOf(entry);

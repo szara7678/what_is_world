@@ -15,9 +15,9 @@ const MONSTER_PURSUE_INTERVAL = 4;
 const VILLAGE_CENTER = { x: 32, y: 25 };
 // 2026-05-09 v3: village_bias 제거 — 자유 wander + pack cohesion 만. spawn 위치(forest-east)로 거리 자체가 위협 완화.
 // 2026-05-09 v4: 멸종 방지 최소 floor 1, 번식 로직으로 점진 증가.
-const HOSTILE_FLOOR_DAY = 10;           // 멸종 방지 최소. forest-east 에서 항상 눈에 띄는 밀도 유지.
-const HOSTILE_FLOOR_NIGHT = 12;
-const HOSTILE_RESPAWN_INTERVAL = 600;   // 1500 → 600 (테스트 안에서 spawn cycle 관찰 가능)
+const HOSTILE_FLOOR_DAY = 5;            // Codex 7차 권고: 10 → 5. character drift가 전투/실패에 묻히지 않게 압력 완화.
+const HOSTILE_FLOOR_NIGHT = 7;          // 밤은 야간 표면 surge 유지 (12 → 7).
+const HOSTILE_RESPAWN_INTERVAL = 1200;  // 600 → 1200. respawn 간격 늘려서 NPC가 hunger/trade/social 더 충분히 겪고 위협 만나도록.
 const PACK_SPAWN_CHANCE = 0.35;
 const INVENTORY_LIMIT = 14;
 type SpawnKind = { kind: string; assetKey: string; namePrefix: string; weight: number };

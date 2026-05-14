@@ -941,6 +941,7 @@ export const createMochiVillageState = (width = 128, height = 96): WorldState =>
     createActor("npc-4", "npc", "Jin", "human.guard", 32, 22, ["wood", "pickaxe", "axe", "leather_armor", "bone_dagger"], 10, "guard"),
     createActor("npc-5", "npc", "Noah", "human.healer", 30, 18, ["herb", "honey", "healing_potion", "leather_armor", "bone_dagger"], 5, "wanderer"),
     // 2026-05-09: monster name = 종 이름만 (id 가 별도 유니크). UI/이벤트 텍스트에서 ID 노출 X.
+    // Passive wildlife (boar/deer) — outside village, NPC food source via hunting
     monsterTuned("monster-boar-1", "Boar", "animal.boar", 50, 2, 22, { strength: 3, dexterity: 4, constitution: 4, intelligence: 1 }),
     monsterTuned("monster-boar-2", "Boar", "animal.boar", 52, 2, 22, { strength: 3, dexterity: 4, constitution: 4, intelligence: 1 }),
     monsterTuned("monster-deer-1", "Deer", "animal.deer", 6, 2, 18, { strength: 2, dexterity: 6, constitution: 3, intelligence: 1 }),
@@ -949,25 +950,24 @@ export const createMochiVillageState = (width = 128, height = 96): WorldState =>
     monsterTuned("monster-deer-4", "Deer", "animal.deer", 4, 18, 18, { strength: 2, dexterity: 6, constitution: 3, intelligence: 1 }),
     monsterTuned("monster-deer-5", "Deer", "animal.deer", 8, 28, 18, { strength: 2, dexterity: 6, constitution: 3, intelligence: 1 }),
     monsterTuned("monster-deer-6", "Deer", "animal.deer", 60, 38, 18, { strength: 2, dexterity: 6, constitution: 3, intelligence: 1 }),
+    monsterTuned("monster-deer-pasture-1", "Deer", "animal.deer", 80, 15, 18, { strength: 2, dexterity: 6, constitution: 3, intelligence: 1 }),
+    monsterTuned("monster-boar-pasture-1", "Boar", "animal.boar", 84, 16, 22, { strength: 3, dexterity: 4, constitution: 4, intelligence: 1 }),
+    // Edge predators — 1 wolf at far west forest edge (cf. forest-west), 0 bears near village
     monsterTuned("monster-wolf-1", "Wolf", "animal.wolf", 4, 12, 30, { strength: 4, dexterity: 5, constitution: 4, intelligence: 1 }),
-    monsterTuned("monster-wolf-2", "Wolf", "animal.wolf", 5, 13, 30, { strength: 4, dexterity: 5, constitution: 4, intelligence: 1 }),
-    monsterTuned("monster-bear-1", "Bear", "animal.bear", 30, 5, 50, { strength: 6, dexterity: 3, constitution: 6, intelligence: 1 }),
+    // Slimes (low-threat, easy combat practice) — kept at southeast pond
     monsterTuned("monster-slime-1", "Slime", "monster.slime.green", 53, 43, 16, { strength: 2, dexterity: 2, constitution: 3, intelligence: 1 }),
     monsterTuned("monster-slime-2", "Slime", "monster.slime.blue", 56, 44, 16, { strength: 2, dexterity: 2, constitution: 3, intelligence: 1 }),
-    monsterTuned("monster-slime-3", "Slime", "monster.slime.yellow", 58, 43, 16, { strength: 2, dexterity: 2, constitution: 3, intelligence: 1 }),
-    monsterTuned("monster-skeleton-1", "Skeleton", "monster.skeleton", 73, 38, 24, { strength: 3, dexterity: 3, constitution: 3, intelligence: 1 }),
+    // Dungeon-concentrated hostiles — cemetery / temple / deep_ruins. Villagers must travel to encounter.
     monsterTuned("monster-skeleton-warrior-1", "Skeleton Warrior", "monster.skeleton_warrior", 77, 40, 34, { strength: 5, dexterity: 3, constitution: 4, intelligence: 1 }),
-    monsterTuned("monster-skeleton-archer-1", "Skeleton Archer", "monster.skeleton_archer", 81, 42, 28, { strength: 3, dexterity: 6, constitution: 3, intelligence: 1 }),
-    monsterTuned("monster-naga-1", "Naga", "monster.naga", 54, 45, 42, { strength: 5, dexterity: 5, constitution: 5, intelligence: 2 }),
-    monsterTuned("monster-troll-1", "Troll", "monster.troll", 90, 48, 96, { strength: 7, dexterity: 2, constitution: 7, intelligence: 1 }),
     monsterTuned("monster-spirit-cemetery-1", "Spirit", "monster.spirit", 15, 49, 28, { strength: 2, dexterity: 5, constitution: 3, intelligence: 3 }),
     monsterTuned("monster-naga-dock-1", "Naga", "monster.naga", 67, 27, 42, { strength: 5, dexterity: 5, constitution: 5, intelligence: 2 }),
-    monsterTuned("monster-skeleton-archer-temple-1", "Skeleton Archer", "monster.skeleton_archer", 103, 16, 28, { strength: 3, dexterity: 6, constitution: 3, intelligence: 1 }),
     monsterTuned("monster-troll-temple-1", "Troll", "monster.troll", 108, 17, 96, { strength: 7, dexterity: 2, constitution: 7, intelligence: 1 }),
-    monsterTuned("monster-troll-deep-ruins-1", "Troll", "monster.troll", 17, 83, 96, { strength: 7, dexterity: 2, constitution: 7, intelligence: 1 }),
-    monsterTuned("monster-deer-pasture-1", "Deer", "animal.deer", 80, 15, 18, { strength: 2, dexterity: 6, constitution: 3, intelligence: 1 }),
-    monsterTuned("monster-boar-pasture-1", "Boar", "animal.boar", 84, 16, 22, { strength: 3, dexterity: 4, constitution: 4, intelligence: 1 })
+    monsterTuned("monster-troll-deep-ruins-1", "Troll", "monster.troll", 17, 83, 96, { strength: 7, dexterity: 2, constitution: 7, intelligence: 1 })
   ];
+  // Spawn count 변경 — Codex 7차 권고. hostile 15 → 7 (wolf 1, slime 2, skeleton 1, spirit 1, naga 1, troll 2).
+  // bear / 마을 근접 skeleton(73,38) / wolf-2 / skeleton-1 / skeleton-archer-1 / naga-1 (54,45 마을 동남부) /
+  // troll-1 (90,48 외곽) / skeleton-archer-temple-1 제거. Villager가 hunger/trade/craft 충분히 겪은 뒤
+  // 외곽·던전 진출 시점에 위협을 만나는 비율로 조정.
 
   const world: WorldState = {
     revision: 1,
