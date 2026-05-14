@@ -880,36 +880,37 @@ OUTPUT EXACTLY ONE JSON OBJECT (no other text, comments, or code blocks):
   "goalDecision": { "kind": "KEEP|COMPLETE|CHANGE|ABANDON", "proposal": { ... }, "reason": "..." },
   "action": { "type": "WAIT", "reason": "<one short clause in your own voice: why this, given who you are right now>" }
 }
-Almost always fill "reason" on non-WAIT actions. Skip only when this beat is a literal continuation of the previous one (sticky executor still running).
-Reason should reference your state, values, persona, or someone you care about — not just restate the action ("to pick up the apple" is bad; "easing hunger before the long walk home" or "saving food to share with Mira" is good).
+ALWAYS fill "reason" on every non-WAIT action (PICKUP/GATHER/USE/MOVE/SPEAK/ATTACK/OFFER_TRADE/ACCEPT_TRADE/GIVE/SLEEP/PRAY). This is non-negotiable — empty reason makes future-you read an action you cannot explain.
+The reason must reference your state, values, persona, relationships, or oracle/social context — NEVER restate the action. Bad: "to pick up the apple", "to use the oven", "to gather wood". Good: "easing hunger before the wolf returns", "Mira shared with me yesterday, I should bring her this", "the workbench is close and the axe project still matters to me".
+You may use the SAME reason as the previous beat if your situation has not changed (e.g., still hungry, still pursuing the same plan) — the dedup is handled server-side. Just write the reason that is true RIGHT NOW.
 goalDecision field is not required every beat. Omit (=KEEP) when no change needed.
 proposal is required only when kind="CHANGE".
 
-action shapes:
-{ "type": "MOVE", "dx": -1|0|1, "dy": -1|0|1 }                                                 // 1-tile step
-{ "type": "MOVE", "to": { "placeId"?: "...", "xy"?: {"x":N,"y":N}, "towardItem"?: "wheat", "towardActor"?: "npc-2" } }   // multi-tile auto
-{ "type": "GATHER", "item": "wheat", "count": 2, "area"?: { "placeId": "field-west", "radius"?: 12 }, "allowWaitSpawn"?: false }   // auto-gather; use radius 8-15 when no exact placeId
-{ "type": "PICKUP", "itemId": "<ground id or prefix>", "count": 1 }                            // underfoot only
-{ "type": "DROP", "itemId": "<inv prefix or instance id>", "count": 1, "x"?: N, "y"?: N }
-{ "type": "ATTACK", "targetId": "<actor>" }                                                    // auto-stop: hp<35% or stamina<20 or target dead or 100 tick
-{ "type": "ATTACK", "targetId": "<actor>", "attackUntil"?: [...], "attackMaxTicks"?: <int> }
-{ "type": "SPEAK", "targetId": "<actor>", "message": "<one short English sentence>",
+action shapes (every non-WAIT shape ALSO accepts "reason": "<why this, in your voice>" — include it):
+{ "type": "MOVE", "dx": -1|0|1, "dy": -1|0|1, "reason": "..." }                                // 1-tile step
+{ "type": "MOVE", "to": { "placeId"?: "...", "xy"?: {"x":N,"y":N}, "towardItem"?: "wheat", "towardActor"?: "npc-2" }, "reason": "..." }   // multi-tile auto
+{ "type": "GATHER", "item": "wheat", "count": 2, "area"?: { "placeId": "field-west", "radius"?: 12 }, "allowWaitSpawn"?: false, "reason": "..." }   // auto-gather; use radius 8-15 when no exact placeId
+{ "type": "PICKUP", "itemId": "<ground id or prefix>", "count": 1, "reason": "..." }            // underfoot only
+{ "type": "DROP", "itemId": "<inv prefix or instance id>", "count": 1, "x"?: N, "y"?: N, "reason": "..." }
+{ "type": "ATTACK", "targetId": "<actor>", "reason": "..." }                                   // auto-stop: hp<35% or stamina<20 or target dead or 100 tick
+{ "type": "ATTACK", "targetId": "<actor>", "attackUntil"?: [...], "attackMaxTicks"?: <int>, "reason": "..." }
+{ "type": "SPEAK", "targetId": "<actor>", "message": "<one short English sentence>", "reason": "...",
   "intent"?: "small_talk"|"help_request"|"warn"|"praise"|"apology" }
 { "type": "OFFER_TRADE", "targetId": "<actor>",
   "wantItem"?: "<key>", "wantCount"?: 1, "offerItem"?: "<key>", "offerCount"?: 1, "offerGold"?: <int>,
-  "message"?: "<one short English sentence>" }
-example: { "type": "OFFER_TRADE", "targetId": "npc-2", "wantItem": "wheat", "wantCount": 2, "offerGold": 3, "message": "Could I buy two wheat for three gold?" }
-{ "type": "ACCEPT_TRADE", "tradeId": "<trade-id>" }                                           // accept one pending trade addressed to you
-{ "type": "REJECT_TRADE", "tradeId": "<trade-id>" }                                           // reject one pending trade addressed to you
-USE: choose exactly one mode — itemId / (objectId, targetItemId?) / skillId.
-{ "type": "USE", "itemId": "<inv prefix or instance id>", "count"?: 1 }
-{ "type": "USE", "objectId": "<structure id>" }
-{ "type": "USE", "objectId": "<structure id>", "targetItemId": "<output prefix>", "count"?: 1 }
-{ "type": "USE", "skillId": "pray" | "appraise", "targetId"?, "targetItemId"?, "x"?, "y"? }
-{ "type": "GIVE", "targetId": "<actor>", "itemId": "<inv prefix>", "count"?: 1 }
-{ "type": "GIVE", "targetId": "<actor>", "currency": "gold", "amount": <int> }
-{ "type": "THINK", "query": "<recall question, 8+ chars>" }
-{ "type": "SLEEP", "maxTicks"?: N }
+  "message"?: "<one short English sentence>", "reason": "..." }
+example: { "type": "OFFER_TRADE", "targetId": "npc-2", "wantItem": "wheat", "wantCount": 2, "offerGold": 3, "message": "Could I buy two wheat for three gold?", "reason": "I'm short on wheat and Mira had plenty earlier" }
+{ "type": "ACCEPT_TRADE", "tradeId": "<trade-id>", "reason": "..." }                          // accept one pending trade addressed to you
+{ "type": "REJECT_TRADE", "tradeId": "<trade-id>", "reason": "..." }                          // reject one pending trade addressed to you
+USE: choose exactly one mode — itemId / (objectId, targetItemId?) / skillId. Always include "reason".
+{ "type": "USE", "itemId": "<inv prefix or instance id>", "count"?: 1, "reason": "..." }
+{ "type": "USE", "objectId": "<structure id>", "reason": "..." }
+{ "type": "USE", "objectId": "<structure id>", "targetItemId": "<output prefix>", "count"?: 1, "reason": "..." }
+{ "type": "USE", "skillId": "pray" | "appraise", "targetId"?, "targetItemId"?, "x"?, "y"?, "reason": "..." }
+{ "type": "GIVE", "targetId": "<actor>", "itemId": "<inv prefix>", "count"?: 1, "reason": "..." }
+{ "type": "GIVE", "targetId": "<actor>", "currency": "gold", "amount": <int>, "reason": "..." }
+{ "type": "THINK", "query": "<recall question, 8+ chars>", "reason": "..." }
+{ "type": "SLEEP", "maxTicks"?: N, "reason": "..." }
 { "type": "OPTIONS" } | { "type": "WAIT" }
 
 RULES (strict):
