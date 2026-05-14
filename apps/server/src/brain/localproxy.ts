@@ -6,7 +6,7 @@ import type { BrainDecision, RecentDecision } from "./prompt";
 
 export async function decideWithLocalProxy(
   cfg: BrainConfig,
-  args: { world: WorldState; me: Actor; soul: Soul; thought: Thought; memories: Observation[]; invalidAction?: { reason: string; options: string[] }; lastDecisions?: RecentDecision[] }
+  args: { world: WorldState; me: Actor; soul: Soul; thought: Thought; memories: Observation[]; invalidAction?: { reason: string; options: string[] }; lastDecisions?: RecentDecision[]; trustByActor?: Record<string, number>; relationships?: Array<{ from: string; to: string; affinity: number; lastInteractionTick: number; trust?: number }> }
 ): Promise<BrainDecision | null> {
   return decideWithOpenRouter({
     ...cfg,

@@ -14,6 +14,9 @@ export interface SelectedAsset {
   tileId?: number;
 }
 
+type CatalogEntry = { key: string; path: string };
+type CatalogPayload = Record<string, unknown>;
+
 export type SelectedEntity =
   | { type: "actor";       id: string; data: Actor }
   | { type: "structure";   id: string; data: Structure }
@@ -28,7 +31,7 @@ export interface GameBridge {
   setMode:          (mode: GameMode) => void;
   setTool:          (tool: EditorTool) => void;
   setSelectedAsset: (asset: SelectedAsset | null) => void;
-  setCatalog:       (catalog: Record<string, Array<{ key: string; path: string }>>) => void;
+  setCatalog:       (catalog: CatalogPayload) => void;
   onEntitySelect:   (cb: (entity: SelectedEntity | null) => void) => void;
   onCellSelect:     (cb: (cell: { x: number; y: number }) => void) => void;
   onLog:            (cb: (msg: string) => void) => void;
@@ -40,7 +43,8 @@ export type SpeechBubbleMap = Record<string, { text: string; until: number }>;
 // ── Constants ─────────────────────────────────────────────────────
 const API             = API_BASE;
 const BASE            = `${API}/static`;
-const TILESET_URL     = `${BASE}/tile/Pipoya%20RPG%20Tileset%2016x16/%5BBase%5DBaseChip_pipo.png`;
+// 사용자 결정: water tile 통합. tile id 58~61 자리에 [A]Water1 plain + variants 합성한 BaseChip.
+const TILESET_URL     = `${BASE}/tile/custom/BaseChip_with_water.png`;
 
 const HUMAN_BASE_PATH = `${BASE}/character/human/game_RESOURCES_cha_spr/%EA%B8%B0%EB%B3%B8/%EB%82%A8`;
 const H_IDLE_BASE     = `${HUMAN_BASE_PATH}/%EA%B8%B0%EB%B3%B8%EB%82%A8_%EB%8C%80%EA%B8%B0_`;
@@ -60,8 +64,8 @@ const SPEECH_BUBBLE_OFFSET = TILE_DISP * 2.05;
 
 // 이동 쿨다운 (ms)
 const MOVE_COOLDOWN   = 160;
-// 보간 속도 (0~1, 높을수록 빠름)
-const LERP_SPEED      = 0.14;  // 0.22 → 0.14: NPC 이동이 더 부드럽게 (1칸당 ~0.7s)
+const ACTOR_LERP_DURATION_MS = 1000;
+const DESYNC_SNAP_DISTANCE = TILE_DISP * 4;
 
 // ── Actor Display ─────────────────────────────────────────────────
 interface ActorDisplay {
@@ -75,8 +79,13 @@ interface ActorDisplay {
   // 보간용 렌더 위치
   renderX:   number;
   renderY:   number;
+  lerpStartX: number;
+  lerpStartY: number;
+  lerpElapsedMs: number;
+  lerpDurationMs: number;
   targetX:   number;
   targetY:   number;
+  kind:      Actor["kind"];
   facing:    "up" | "down" | "left" | "right";
   isMoving:  boolean;
   baseSpriteY: number;
@@ -109,21 +118,33 @@ const compressIntent = (text: string): string => {
   const trimmed = text.trim();
   if (!trimmed) return "";
   const upper = trimmed.toUpperCase();
-  if (upper.includes("MOVE") || upper.includes("GOTO")) return "→ 이동";
-  if (upper.includes("PICKUP")) return "↓ 줍기";
-  if (upper.includes("USE")) return "✻ 사용";
-  if (upper.includes("SPEAK")) return "💬";
-  if (upper.includes("ATTACK")) return "⚔";
-  if (upper.includes("WAIT")) return "·· 쉬기";
+  if (upper.includes("MOVE") || upper.includes("GOTO")) return "→ Move";
+  if (upper.includes("PICKUP")) return "↓ Pick";
+  if (upper.includes("DROP")) return "↑ Drop";
+  if (upper.includes("USE")) return "✻ Use";
+  if (upper.includes("GATHER")) return "⌬ Gather";
+  if (upper.includes("GIVE")) return "🎁 Give";
+  if (upper.includes("OFFER_TRADE") || upper.includes("TRADE")) return "⇄ Trade";
+  if (upper.includes("SPEAK")) return "💬 Talk";
+  if (upper.includes("ATTACK")) return "⚔ Attack";
+  if (upper.includes("PRAY")) return "🙏 Pray";
+  if (upper.includes("THINK")) return "💭 Think";
+  if (upper.includes("WAIT")) return "·· Wait";
+  if (upper.includes("OPTIONS") || upper.includes("INVENTORY")) return "📋 Check";
+  // Fallback: first word, max 8 chars
   const firstWord = trimmed.split(/\s+/)[0] ?? "";
-  return Array.from(firstWord).slice(0, 6).join("");
+  return firstWord.slice(0, 8);
 };
 
 const intentBackgroundForEmotion = (emotion: string): string => {
-  if (emotion.includes("경계") || emotion.includes("두려움")) return "rgba(233,180,76,0.85)";
-  if (emotion.includes("피곤")) return "rgba(164,111,161,0.7)";
+  const e = emotion.toLowerCase();
+  if (e.includes("afraid") || e.includes("alert") || e.includes("vigilant") || e.includes("fear")) return "rgba(233,180,76,0.85)";
+  if (e.includes("weary") || e.includes("tired") || e.includes("exhaust")) return "rgba(164,111,161,0.7)";
   return "rgba(251,246,236,0.85)";
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
 
 // ── WorldScene ────────────────────────────────────────────────────
 class WorldScene extends Phaser.Scene {
@@ -149,6 +170,7 @@ class WorldScene extends Phaser.Scene {
   private fallbackGfx:    Phaser.GameObjects.Graphics  | null = null;
   private placeGfx:       Phaser.GameObjects.Graphics  | null = null;
   private placeLabel:     Phaser.GameObjects.Text      | null = null;
+  private itemLabel:      Phaser.GameObjects.Text      | null = null;
   private dayNightOverlay: Phaser.GameObjects.Rectangle | null = null;
   private actorDisplays:  Map<string, ActorDisplay>    = new Map();
   private actorPrevTile:  Map<string, { x: number; y: number }> = new Map();
@@ -237,14 +259,41 @@ class WorldScene extends Phaser.Scene {
   setTool(t: EditorTool): void { this.tool = t; }
   setSelectedAsset(a: SelectedAsset | null): void { this.selectedAsset = a; }
 
-  setCatalog(catalog: Record<string, Array<{ key: string; path: string }>>): void {
-    this.catalogCache.clear();
-    for (const items of Object.values(catalog)) {
-      for (const item of items) {
-        const url = item.path.startsWith("http") ? item.path : `${API}${item.path}`;
-        this.catalogCache.set(item.key, url);
+  private flattenCatalog(catalog: CatalogPayload): CatalogEntry[] {
+    const root = isRecord(catalog.catalog) ? catalog.catalog : catalog;
+    const entries: CatalogEntry[] = [];
+    const add = (key: unknown, path: unknown): void => {
+      if (typeof key === "string" && typeof path === "string") entries.push({ key, path });
+    };
+    const flat = isRecord(root.flat) ? root.flat : isRecord(catalog.flat) ? catalog.flat : null;
+    if (flat) {
+      for (const [key, path] of Object.entries(flat)) add(key, path);
+    }
+    for (const value of Object.values(root)) {
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (!isRecord(item)) continue;
+          add(item.key, item.path);
+        }
+      } else if (isRecord(value)) {
+        for (const [key, path] of Object.entries(value)) add(key, path);
       }
     }
+    return entries;
+  }
+
+  setCatalog(catalog: CatalogPayload): void {
+    this.catalogCache.clear();
+    for (const item of this.flattenCatalog(catalog)) {
+      // 2026-05-11: `/assets/` prefix 는 vite dist (js/css) 전용. 실제 asset 은 server `/static/` 으로 서빙.
+      const path = item.path.startsWith("/assets/") ? item.path.replace(/^\/assets\//, "/static/") : item.path;
+      const url = path.startsWith("http") ? path : `${API}${path}`;
+      this.catalogCache.set(item.key, url);
+    }
+    console.info(`[WorldScene] catalog keys=${this.catalogCache.size}`);
+    // 2026-05-07: catalog 갱신 시 이전 load 실패한 texturePromises 정리.
+    // (Phaser 가 실패 후 fallback 영구화되는 것 방지 — codex 권고.)
+    this.texturePromises.clear();
     this.rebuildAssetDisplays();
   }
 
@@ -360,7 +409,7 @@ class WorldScene extends Phaser.Scene {
     try {
       const res = await fetch(`${API}/assets/catalog`);
       if (!res.ok) return;
-      const data = await res.json() as Record<string, Array<{ key: string; path: string }>>;
+      const data = await res.json() as CatalogPayload;
       this.setCatalog(data);
     } catch (e) {
       console.warn("[WorldScene] catalog fetch failed", e);
@@ -376,6 +425,14 @@ class WorldScene extends Phaser.Scene {
       backgroundColor: "rgba(43,33,24,0.72)",
       padding: { left: 6, right: 6, top: 3, bottom: 3 },
     }).setDepth(98).setOrigin(0.5, 1).setVisible(false);
+    // 2026-05-09: ground item hover tooltip — 같은 칸에 여러 개면 세로 나열.
+    this.itemLabel    = this.add.text(0, 0, "", {
+      fontSize: "11px",
+      color: "#fff6df",
+      backgroundColor: "rgba(43,33,24,0.85)",
+      padding: { left: 6, right: 6, top: 3, bottom: 3 },
+      align: "left",
+    }).setDepth(99).setOrigin(0.5, 1).setVisible(false);
     const cam = this.cameras.main;
     cam.roundPixels = true;
     this.dayNightOverlay = this.add.rectangle(0, 0, cam.width, cam.height, 0x2f3e5c, 0)
@@ -444,23 +501,45 @@ class WorldScene extends Phaser.Scene {
   }
 
   // ── Interpolation ─────────────────────────────────────────────
-  private updateActorInterpolation(_delta: number): void {
+  private updateActorInterpolation(delta: number): void {
     for (const d of this.actorDisplays.values()) {
-      const dx = d.targetX - d.renderX;
-      const dy = d.targetY - d.renderY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      d.isMoving = dist >= 0.6;
-      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 0.15) {
-        d.facing = dx < 0 ? "left" : "right";
-      } else if (Math.abs(dy) > 0.15) {
-        d.facing = dy < 0 ? "up" : "down";
-      }
-      if (dist < 0.5) {
+      const authDx = d.targetX - d.renderX;
+      const authDy = d.targetY - d.renderY;
+      const authDist = Math.hypot(authDx, authDy);
+      let movedX = 0;
+      let movedY = 0;
+
+      if (authDist > DESYNC_SNAP_DISTANCE) {
         d.renderX = d.targetX;
         d.renderY = d.targetY;
+        d.lerpStartX = d.targetX;
+        d.lerpStartY = d.targetY;
+        d.lerpElapsedMs = d.lerpDurationMs;
+        d.isMoving = false;
+      } else if (authDist > 0.5) {
+        const prevX = d.renderX;
+        const prevY = d.renderY;
+        d.lerpElapsedMs = Math.min(d.lerpDurationMs, d.lerpElapsedMs + Math.max(0, delta));
+        // Match one-tile authoritative updates to the server cadence instead of a fixed px/sec speed.
+        const t = d.lerpDurationMs > 0 ? Phaser.Math.Clamp(d.lerpElapsedMs / d.lerpDurationMs, 0, 1) : 1;
+        d.renderX = Phaser.Math.Linear(d.lerpStartX, d.targetX, t);
+        d.renderY = Phaser.Math.Linear(d.lerpStartY, d.targetY, t);
+        movedX = d.renderX - prevX;
+        movedY = d.renderY - prevY;
+        d.isMoving = t < 1;
       } else {
-        d.renderX += dx * LERP_SPEED;
-        d.renderY += dy * LERP_SPEED;
+        d.renderX = d.targetX;
+        d.renderY = d.targetY;
+        d.lerpStartX = d.targetX;
+        d.lerpStartY = d.targetY;
+        d.lerpElapsedMs = d.lerpDurationMs;
+        d.isMoving = false;
+      }
+
+      if (Math.abs(movedX) > Math.abs(movedY) && Math.abs(movedX) > 0.15) {
+        d.facing = movedX < 0 ? "left" : "right";
+      } else if (Math.abs(movedY) > 0.15) {
+        d.facing = movedY < 0 ? "up" : "down";
       }
       d.container.setPosition(d.renderX, d.renderY);
       this.updateActorSpritePose(d);
@@ -543,23 +622,25 @@ class WorldScene extends Phaser.Scene {
       left:  { dx: -1, dy: 0 }, right: { dx: 1, dy:  0 },
     }[this.playerFacing];
 
-    const tx = player.x + facingVec.dx;
-    const ty = player.y + facingVec.dy;
+    const px = Math.round(player.x);
+    const py = Math.round(player.y);
+    const tx = px + facingVec.dx;
+    const ty = py + facingVec.dy;
 
     // 해당 방향 타일에 있는 적 찾기
     let target = Object.values(this.world.actors)
-      .find((a) => a.alive && a.id !== "player-1" && a.x === tx && a.y === ty);
+      .find((a) => a.alive && a.id !== "player-1" && Math.round(a.x) === tx && Math.round(a.y) === ty);
 
-    // 없으면 맨해튼 거리 1 이내 가장 가까운 적
+    // 없으면 거리 1 이내 가장 가까운 적
     if (!target) {
       target = Object.values(this.world.actors)
         .filter((a) => a.alive && a.id !== "player-1")
         .sort((a, b) => {
-          const da = Math.abs(a.x - player.x) + Math.abs(a.y - player.y);
-          const db = Math.abs(b.x - player.x) + Math.abs(b.y - player.y);
+          const da = Math.hypot(a.x - player.x, a.y - player.y);
+          const db = Math.hypot(b.x - player.x, b.y - player.y);
           return da - db;
         })[0];
-      if (target && (Math.abs(target.x - player.x) + Math.abs(target.y - player.y)) > 1)
+      if (target && Math.hypot(target.x - player.x, target.y - player.y) > 1.05)
         target = undefined;
     }
 
@@ -708,14 +789,16 @@ class WorldScene extends Phaser.Scene {
 
   private doSelect(tx: number, ty: number): void {
     if (!this.world) return;
-    for (const a of Object.values(this.world.actors)) {
-      if (!a.alive) continue;
-      if (Math.round(a.x) === tx && Math.round(a.y) === ty) {
-        this.selectedId = a.id;
-        this.onEntitySelectCb?.({ type:"actor", id:a.id, data:a });
-        this.log(`선택: ${a.name} (${a.kind})`);
-        return;
-      }
+    const actorHit = Object.values(this.world.actors)
+      .filter((a) => a.alive)
+      .map((a) => ({ actor: a, dist: Math.hypot(a.x - tx, a.y - ty) }))
+      .filter((hit) => hit.dist <= 0.75)
+      .sort((a, b) => a.dist - b.dist)[0]?.actor;
+    if (actorHit) {
+      this.selectedId = actorHit.id;
+      this.onEntitySelectCb?.({ type:"actor", id:actorHit.id, data:actorHit });
+      this.log(`선택: ${actorHit.name} (${actorHit.kind})`);
+      return;
     }
     for (const s of Object.values(this.world.structures)) {
       if (tx >= s.x && tx < s.x+s.width && ty >= s.y && ty < s.y+s.height) {
@@ -950,8 +1033,15 @@ class WorldScene extends Phaser.Scene {
         this.actorDisplays.set(actor.id, d);
       }
 
+      if (d.targetX !== targetX || d.targetY !== targetY) {
+        d.lerpStartX = d.renderX;
+        d.lerpStartY = d.renderY;
+        d.lerpElapsedMs = 0;
+        d.lerpDurationMs = ACTOR_LERP_DURATION_MS;
+      }
       d.targetX = targetX;
       d.targetY = targetY;
+      d.kind = actor.kind;
 
       // 이동 감지 → 애니메이션 전환
       const prev = this.actorPrevTile.get(actor.id);
@@ -1142,7 +1232,8 @@ class WorldScene extends Phaser.Scene {
 
     const display = { container, sprite:spr, fallback, label, intentLabel, speechBubble, hpBar,
              renderX:startX, renderY:startY, targetX:startX, targetY:startY,
-             facing:"down" as const, isMoving:false, baseSpriteY, animKeys, hitFlash:0 };
+             lerpStartX:startX, lerpStartY:startY, lerpElapsedMs:ACTOR_LERP_DURATION_MS, lerpDurationMs:ACTOR_LERP_DURATION_MS,
+             kind:actor.kind, facing:"down" as const, isMoving:false, baseSpriteY, animKeys, hitFlash:0 };
     this.updateActorIntentLabel(actor.id, display);
     return display;
   }
@@ -1173,6 +1264,9 @@ class WorldScene extends Phaser.Scene {
 
   private buildStructureDisplay(s: Structure, wx:number, wy:number, ww:number, wh:number): void {
     const url = s.assetKey ? this.catalogCache.get(s.assetKey) : undefined;
+    const displayScale = this.structureDisplayScale(s);
+    const displayW = ww * displayScale;
+    const displayH = wh * displayScale;
     const fallback = () => {
       const c = this.add.container(wx, wy).setDepth(5);
       c.add(this.makeStructureFallback(s.type, ww, wh)); this.structureObjs.set(s.id, c);
@@ -1183,12 +1277,19 @@ class WorldScene extends Phaser.Scene {
         if (!this.world?.structures[s.id]) return;
         this.structureObjs.get(s.id)?.destroy(); this.structureObjs.delete(s.id);
         const c = this.add.container(wx, wy).setDepth(5);
-        c.add(this.add.image(ww/2, wh/2, tk).setDisplaySize(ww, wh)); this.structureObjs.set(s.id, c);
+        c.add(this.add.image(ww/2, wh/2, tk).setDisplaySize(displayW, displayH)); this.structureObjs.set(s.id, c);
       };
       if (this.textures.exists(tk)) { build(); return; }
       fallback(); this.loadTextureIfNeeded(s.assetKey, url, build); return;
     }
     fallback();
+  }
+
+  private structureDisplayScale(s: Structure): number {
+    if (s.assetKey === "object.forge" || s.assetKey === "object.workbench" || s.type === "forge" || s.type === "workbench") {
+      return 0.6;
+    }
+    return 1;
   }
 
   private makeStructureFallback(lbl:string, ww:number, wh:number): Phaser.GameObjects.GameObject[] {
@@ -1268,6 +1369,7 @@ class WorldScene extends Phaser.Scene {
     this.hoverGfx.clear();
     this.selectionGfx.clear();
     this.placeLabel?.setVisible(false);
+    this.itemLabel?.setVisible(false);
 
     if (this.selectedId && this.world) {
       const actor = this.world.actors[this.selectedId];
@@ -1300,6 +1402,25 @@ class WorldScene extends Phaser.Scene {
         .setPosition(
           (hoveredPlace.x + hoveredPlace.width / 2) * TILE_DISP,
           hoveredPlace.y * TILE_DISP - 4
+        )
+        .setVisible(true);
+    }
+
+    // 2026-05-09: ground item hover tooltip — 같은 칸 여러 개 prefix 카운트해서 세로 나열.
+    const itemsHere: Record<string, number> = {};
+    for (const g of Object.values(this.world.groundItems ?? {})) {
+      if (g.x !== this.cursorTileX || g.y !== this.cursorTileY) continue;
+      const prefix = (g.id?.split("-")[0]) || g.type || "item";
+      itemsHere[prefix] = (itemsHere[prefix] ?? 0) + 1;
+    }
+    const entries = Object.entries(itemsHere).sort((a,b) => b[1]-a[1]);
+    if (this.itemLabel && entries.length > 0) {
+      const lines = entries.map(([k,n]) => n > 1 ? `${k} ×${n}` : k);
+      this.itemLabel
+        .setText(lines.join("\n"))
+        .setPosition(
+          this.cursorTileX * TILE_DISP + TILE_DISP / 2,
+          this.cursorTileY * TILE_DISP - 4
         )
         .setVisible(true);
     }

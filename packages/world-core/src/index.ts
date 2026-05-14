@@ -1,6 +1,7 @@
 export * from "./state/createWorldState";
 export * from "./actions/dispatchAction";
 export * from "./pathing/findPath";
+export * from "./placement/groundItems";
 export * from "./effects/itemEffects";
 export * from "./edits/dispatchEdit";
 export * from "./simulation/tickWorld";
@@ -8,3 +9,4 @@ export * from "./simulation/tickWorldContext";
 export * from "./effects/itemPrices";
 export * from "./economy/pendingTrade";
 export * from "./recipes/recipes";
+export * from "./content/monsters";

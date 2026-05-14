@@ -1,6 +1,6 @@
 /**
  * Station / Place 카탈로그 — 단일 출처.
- * structure.type → 한국어 라벨, place.kind → 한국어 라벨.
+ * 2026-05-08: 영어 통일 + desc 추가. 새 station/place 추가 시 desc 도 같이 작성.
  */
 
 export interface StationDef {
@@ -9,37 +9,47 @@ export interface StationDef {
   korName: string;
   /** 권장 craft 카테고리 (recipe.station 일치) */
   category?: "cooking" | "alchemy" | "wood" | "metal";
+  /** appraise + prompt 노출용 정확 설명 — recipes.ts 와 정합 유지 필수 */
+  desc?: string;
 }
 
 export const STATION_CATALOG: Record<string, StationDef> = {
-  oven:          { id: "oven",          korName: "오븐",     category: "cooking" },
-  alchemy_table: { id: "alchemy_table", korName: "연금대",   category: "alchemy" },
-  workbench:     { id: "workbench",     korName: "작업대",   category: "wood" },
-  forge:         { id: "forge",         korName: "대장간",   category: "metal" }
+  oven:          { id: "oven",          korName: "oven",          category: "cooking", desc: "Cooking station. Bake or roast food using flour-grain or fish-and-herb. USE objectId+targetItemId to craft." },
+  alchemy_table: { id: "alchemy_table", korName: "alchemy table", category: "alchemy", desc: "Alchemy station. Brew potions from herbs, berries, mushrooms. USE objectId+targetItemId to craft." },
+  workbench:     { id: "workbench",     korName: "workbench",     category: "wood",    desc: "Wood-and-metal crafting station. Build tools and blueprint kits. USE objectId+targetItemId to craft." },
+  forge:         { id: "forge",         korName: "forge",         category: "metal",   desc: "Smithing station. Hammer ore + wood + coal into pickaxes and weapons. USE objectId+targetItemId to craft." }
 };
 
 /** 모든 station id (Set 으로 lookup) */
 export const STATION_TYPES = new Set(Object.keys(STATION_CATALOG));
 
-/** id → 한국어. 모르면 id 그대로 */
+/** id → 표시 이름. 모르면 id 그대로 */
 export const stationKor = (id: string): string => STATION_CATALOG[id]?.korName ?? id;
 
-/** place.kind → 한국어 라벨. 알려진 kind 만, 모르면 kind 그대로 */
+/** id → 영문 (LLM prompt 용). station id 자체가 영문. */
+export const stationEn = (id: string): string => id;
+
+/** id → desc (없으면 빈 문자열). */
+export const stationDesc = (id: string): string => STATION_CATALOG[id]?.desc ?? "";
+
+/** place.kind → 표시 이름 라벨. 모르면 kind 그대로 */
 export const PLACE_KIND_LABEL: Record<string, string> = {
-  shop:        "가게",
-  home:        "집",
-  shrine:      "사당",
-  tavern:      "선술집",
-  field:       "텃밭",
-  well:        "우물",
-  pond:        "연못",
-  plaza:       "광장",
-  forest_edge: "숲가",
-  forest:      "숲",
-  mine:        "광산",
-  smithy:      "대장간",
-  alchemy:     "연금실",
-  noticeboard: "게시판",
-  road:        "길"
+  shop:        "shop",
+  home:        "home",
+  shrine:      "shrine",
+  tavern:      "tavern",
+  field:       "field",
+  well:        "well",
+  pond:        "pond",
+  plaza:       "plaza",
+  forest_edge: "forest edge",
+  forest:      "forest",
+  mine:        "mine",
+  smithy:      "smithy",
+  alchemy:     "alchemy",
+  noticeboard: "noticeboard",
+  road:        "road"
 };
 export const placeKindKor = (kind: string): string => PLACE_KIND_LABEL[kind] ?? kind;
+/** place.kind 영문 (LLM prompt 용). kind 자체가 영문이라 통과. */
+export const placeKindEn = (kind: string): string => kind;

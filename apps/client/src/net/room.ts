@@ -1,13 +1,14 @@
 import { Client, type Room } from "colyseus.js";
 import type { ClientToServerMessage, WorldState } from "@wiw/shared";
 import { WS_URL } from "./endpoints";
+import { getAdminToken } from "./adminAuth";
 
 const client = new Client(WS_URL);
 let roomRef: Room<WorldState> | null = null;
 
 export const joinWorld = async (): Promise<Room<WorldState>> => {
   if (roomRef) return roomRef;
-  roomRef = await client.joinOrCreate<WorldState>("world");
+  roomRef = await client.joinOrCreate<WorldState>("world", { token: getAdminToken() });
   return roomRef;
 };
 

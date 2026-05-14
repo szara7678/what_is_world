@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { API_BASE } from "../net/endpoints";
+import { adminFetch } from "../net/adminAuth";
 
 interface PublicConfig {
   provider: "mock" | "openrouter" | "local-proxy";
@@ -47,7 +48,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         setEnabled(json.config.enabled);
         setReflectMs(json.config.reflectIntervalMs ?? 90000);
       })
-      .catch((e) => setMsg(`로드 실패: ${e}`));
+      .catch((e) => setMsg(`Load failed: ${e}`));
   }, []);
 
   const save = async () => {
@@ -62,7 +63,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         reflectIntervalMs: reflectMs
       };
       if (apiKey) body.apiKey = apiKey;
-      const res = await fetch(`${API_BASE}/config/brain`, {
+      const res = await adminFetch(`${API_BASE}/config/brain`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
@@ -71,12 +72,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       if (json.ok) {
         setCfg(json.config);
         setApiKey("");
-        setMsg("✔ 저장됐어요.");
+        setMsg("✔ Saved.");
       } else {
-        setMsg("저장 실패");
+        setMsg("Save failed");
       }
     } catch (e) {
-      setMsg(`오류: ${e}`);
+      setMsg(`Error: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -85,8 +86,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>⚙️ 두뇌 설정</h2>
-        <div className="sub">OpenRouter 토큰과 모델을 설정해요. 토큰은 서버에만 저장돼요.</div>
+        <h2>⚙️ Brain settings</h2>
+        <div className="sub">Configure OpenRouter token and model. Token is stored on the server only.</div>
 
         <div className="form-row">
           <label>Provider</label>
@@ -101,11 +102,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               }
             }}
           >
-            <option value="mock">Mock (규칙 기반 더미)</option>
+            <option value="mock">Mock (rule-based dummy)</option>
             <option value="openrouter">OpenRouter</option>
             <option value="local-proxy">Local Proxy</option>
           </select>
-          <div className="hint">Mock으로 동작 확인 후 OpenRouter 또는 로컬 프록시로 전환해보세요.</div>
+          <div className="hint">Verify with Mock first, then switch to OpenRouter or local proxy.</div>
         </div>
 
         <div className="form-row">
@@ -114,9 +115,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="form-row">
-          <label>API Key {cfg?.hasApiKey ? <span style={{ color: "var(--accent3)" }}>(저장됨)</span> : <span style={{ color: "var(--text3)" }}>(미설정)</span>}</label>
-          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={cfg?.hasApiKey ? "바꾸려면 새 키 입력" : "sk-or-v1-..."} />
-          <div className="hint">화면에 표시되지 않습니다. 바꾸고 싶을 때만 다시 입력하세요.</div>
+          <label>API Key {cfg?.hasApiKey ? <span style={{ color: "var(--accent3)" }}>(saved)</span> : <span style={{ color: "var(--text3)" }}>(미Settings)</span>}</label>
+          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={cfg?.hasApiKey ? "Enter new key to replace" : "sk-or-v1-..."} />
+          <div className="hint">Not shown on screen. Re-enter only to change.</div>
         </div>
 
         <div className="form-row">
@@ -125,7 +126,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             {models.map((m) => (
               <option key={m.value} value={m.value}>{m.label} — {m.note}</option>
             ))}
-            <option value={model}>{model} (사용자 지정)</option>
+            <option value={model}>{model} (custom)</option>
           </select>
           <input
             type="text"
@@ -134,32 +135,32 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             placeholder="openai/gpt-4o-mini"
             style={{ marginTop: 6 }}
           />
-          <div className="hint">목록에 없는 모델은 직접 입력해도 돼요. 예: <code>z-ai/glm-4.6</code></div>
+          <div className="hint">Models not in the list can be entered directly. e.g. <code>z-ai/glm-4.6</code></div>
         </div>
 
         <div className="form-row row-horiz">
           <label>Tick (ms)</label>
           <input type="number" min={1000} max={60000} step={500} value={tickMs} onChange={(e) => setTickMs(Number(e.target.value))} style={{ width: 100 }} />
-          <label>동시 주민</label>
+          <label>Concurrent residents</label>
           <input type="number" min={1} max={10} value={maxActors} onChange={(e) => setMaxActors(Number(e.target.value))} style={{ width: 60 }} />
         </div>
 
         <div className="form-row row-horiz">
-          <label>되돌아봄 주기 (ms)</label>
+          <label>Reflection interval (ms)</label>
           <input type="number" min={15000} max={300000} step={5000} value={reflectMs} onChange={(e) => setReflectMs(Number(e.target.value))} style={{ width: 110 }} />
-          <span className="hint">🪞 관찰 3개 이상 쌓이면 요약해 soul의 values/goals 업데이트</span>
+          <span className="hint">🪞 When 3+ observations collected, summarize and update soul's values/goals</span>
         </div>
 
         <div className="form-row row-horiz">
           <input id="cfg-enabled" type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          <label htmlFor="cfg-enabled">두뇌 루프 켜기 (체크해야 주민들이 생각해요)</label>
+          <label htmlFor="cfg-enabled">Enable brain loop (residents only think when checked)</label>
         </div>
 
         {msg && <div style={{ color: "var(--text2)", fontSize: 12, marginBottom: 10 }}>{msg}</div>}
 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button className="ghost-btn" onClick={onClose} disabled={saving}>닫기</button>
-          <button className="primary-btn" onClick={save} disabled={saving}>{saving ? "저장 중…" : "저장"}</button>
+          <button className="ghost-btn" onClick={onClose} disabled={saving}>Close</button>
+          <button className="primary-btn" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save"}</button>
         </div>
       </div>
     </div>

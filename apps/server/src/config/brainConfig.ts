@@ -18,6 +18,14 @@ export interface BrainConfig {
   reflectIntervalMs: number;
   /** actor 별 모델 override. 예: { "npc-2": "gpt-5.5", "player-1": "gpt-5.4" }. 없으면 글로벌 model. */
   modelOverrides?: Record<string, string>;
+  /**
+   * PR1: plan-driven 활성화 단계.
+   *  off    — plan 무시 (현 atomic 경로만)
+   *  shadow — LLM 이 plan 출력해도 저장만, 실행 X (parsing 안정성 검증)
+   *  assist — safe step (GO_TO/WAIT_UNTIL/GATHER) 만 executor 실행
+   *  full   — 전체 step kind 실행
+   */
+  planMode?: "off" | "shadow" | "assist" | "full";
   updatedAt: number;
 }
 
@@ -45,10 +53,11 @@ const DEFAULT: BrainConfig = {
   model: LOCAL_PROXY_DEFAULTS.model,
   baseUrl: LOCAL_PROXY_DEFAULTS.baseUrl,
   tickIntervalMs: 2000,
-  maxActorsPerTick: 2,
+  maxActorsPerTick: 4,
   enabled: false,
   fallbackToMock: false,
   reflectIntervalMs: 90000,
+  planMode: "off", // PR1 기본 off — 자료구조만 land. 라이브에서 점진 활성화.
   updatedAt: 0
 };
 
@@ -106,6 +115,7 @@ export const publicBrainConfig = (c: BrainConfig = current) => ({
   fallbackToMock: c.fallbackToMock,
   reflectIntervalMs: c.reflectIntervalMs,
   modelOverrides: c.modelOverrides ?? {},
+  planMode: c.planMode ?? "off",
   hasApiKey: Boolean(c.apiKey),
   updatedAt: c.updatedAt
 });

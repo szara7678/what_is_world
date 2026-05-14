@@ -1,5 +1,6 @@
 import type { Place } from "./place";
 import type { Skill } from "./skill";
+import type { AttackUntilCondition } from "./action";
 import type { WorldContext } from "./world-context";
 
 export type LayerName = "terrain" | "collision" | "decor";
@@ -61,8 +62,21 @@ export type Actor = {
   stamina: number;
   maxStamina: number;
   hunger: number;
+  /** 2026-05-08: hunger ceiling (stat-coupled). 미설정 시 100 implicit. */
+  maxHunger?: number;
   status: ActorStatus;
   skills: Skill[];
+  /** 2026-05-08: 본인이 실제 craft 성공한 recipe 만 기록 (birth/heard 제외). prompt 의 KNOWN RECIPES surface. */
+  knownRecipes?: Array<{ recipeId: string; count: number; firstCraftedTick: number; lastCraftedTick: number }>;
+  /** 2026-05-08: appraise 성공한 item prefix → 학습한 max level. KNOWLEDGE 블록 desc 차등. */
+  appraisedItems?: Record<string, number>;
+  /** 2026-05-08: appraise 성공한 station kind → 학습한 max level. */
+  appraisedStations?: Record<string, number>;
+  /**
+   * 2026-05-09 PR-1: 본인이 방문 or admin seed 한 place 별 자원 인지.
+   * locked: admin seed → age decay 면제 (mentor 의 기본 지식).
+   */
+  discoveredPlaces?: Record<string, { resourcesSeen: string[]; firstVisitTick: number; lastVisitTick: number; locked?: boolean }>;
   gold: number;
   inventory: InventorySlot[];
   consecutiveThinks?: number;
@@ -75,6 +89,38 @@ export type Actor = {
   /** target 좌표까지의 path. tickWorld 가 매 tick cooldown 지나면 1칸씩 진행. */
   movePath?: Array<{ dx: number; dy: number }>;
   movePathTarget?: { x: number; y: number };
+  /** USE sticky executor. 사거리 밖 station craft/use 를 예약하고 도착 후 tickWorld 가 실제 USE 를 재시도. */
+  pendingUse?: {
+    objectId?: string;
+    itemId?: string;
+    targetItemId?: string;
+    skillId?: string;
+    queuedAtTick: number;
+  };
+  /** GATHER count 자동 반복용 stash. tickWorld 가 매 tick 이동/줍기/채집을 진행. */
+  gatherIntent?: {
+    item: string;
+    count: number;
+    area?: { placeId?: string; radius?: number };
+    allowWaitSpawn?: boolean;
+    startedAtTick: number;
+    collected: number;
+    targetId?: string;
+    targetKind?: "groundItem" | "structure";
+  };
+  /** P0-4: ATTACK 자동 반복용 stash. tickWorld 가 매 tick cooldown 지나면 자동 공격. */
+  attackTargetId?: string;
+  attackUntil?: AttackUntilCondition[];
+  attackStartedAtTick?: number;
+  attackMaxTicks?: number;
+  /** SLEEP sticky executor. tickWorld 가 매 tick 회복/interrupt/maxTicks 를 처리. */
+  sleeping?: {
+    startedAtTick: number;
+    maxTicks: number;
+    lastTick: number;
+  };
+  lastBlockedPlan?: { tick: number; text: string; reason: string };
+  recentBlockers?: Array<{ tick: number; reason: string }>;
   alive: boolean;
 };
 
@@ -85,6 +131,7 @@ export type GroundItem = {
   type: string;
   iconKey?: string;
   actorName?: string;
+  claimedBy?: string;
 };
 
 /**
@@ -110,6 +157,39 @@ export type Crop = {
   iconKey?: string;
 };
 
+export type PendingTradeItem = { item: string; count: number };
+
+export type PendingTradeOffer = { item?: string; count?: number; gold?: number };
+
+export type PendingTradeStatus = "pending" | "accepted" | "rejected" | "expired" | "auto_rejected";
+
+export type PendingTrade = {
+  id: string;
+  from: string;
+  to: string;
+  wants: PendingTradeItem[];
+  offers: PendingTradeOffer;
+  createdAtTick: number;
+  expiresAtTick: number;
+  status: PendingTradeStatus;
+  reason?: string;
+  resolvedAtTick?: number;
+  /** Legacy fields retained for snapshot migration/backward compatibility only. */
+  expectedItem?: string;
+  expectedCurrency?: "gold";
+  amount?: number;
+};
+
+export type WorldEvent = {
+  tick: number;
+  actorId?: string;
+  category: "action" | "world" | "brain";
+  type: string;
+  result: "success" | "failed" | "info";
+  reason?: string;
+  payload?: Record<string, unknown>;
+};
+
 export type WorldState = {
   revision: number;
   tick: number;
@@ -128,14 +208,8 @@ export type WorldState = {
   actors: Record<string, Actor>;
   groundItems: Record<string, GroundItem>;
   crops?: Record<string, Crop>;
-  pendingTrades?: Array<{
-    from: string;
-    to: string;
-    expectedItem?: string;
-    expectedCurrency?: "gold";
-    amount?: number;
-    expiresAtTick: number;
-  }>;
+  pendingTrades?: PendingTrade[];
+  eventQueue?: WorldEvent[];
   spawnPoints: {
     humans: Array<{ x: number; y: number; assetKey?: string }>;
     animals: Array<{ x: number; y: number; assetKey?: string }>;

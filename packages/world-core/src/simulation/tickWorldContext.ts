@@ -1,7 +1,8 @@
 import { createDefaultWorldContext, type PlaceKind, type Weather, type WorldState } from "@wiw/shared";
 import { createDefaultSkills } from "../state/createWorldState";
+import { placeGroundItemAt } from "../placement/groundItems";
 
-const DAY_TICKS = 2400;
+const DAY_TICKS = 1440;
 const TRAVELER_ID = "traveler-1";
 
 const WEATHER_WEIGHTS: Array<{ weather: Weather; weight: number }> = [
@@ -13,11 +14,11 @@ const WEATHER_WEIGHTS: Array<{ weather: Weather; weight: number }> = [
 ];
 
 const ISSUE_TEXT = {
-  well_dry: "우물 물이 말라가고 있어 물을 아껴야 한다.",
-  boar_pack: "북쪽 숲에 멧돼지 무리가 보인다는 소문이 돈다.",
-  low_harvest: "텃밭 수확물이 줄어 마을 사람들이 식량을 걱정한다.",
-  harvest_festival: "오늘은 수확 축제라 광장에 모여 음식을 나누기 좋다.",
-  traveler_arrival: "여행자가 광장에 머물며 다른 마을 소식을 전하고 있다."
+  well_dry: "The well is running low; villagers should ration water.",
+  boar_pack: "Rumors say a pack of boars has been spotted in the northern forest.",
+  low_harvest: "Field yields are dropping; villagers worry about food stores.",
+  harvest_festival: "Today is the harvest festival — a good day to gather and share food at the plaza.",
+  traveler_arrival: "A traveler is staying at the plaza, sharing news from other villages."
 } as const;
 
 const pickWeather = (): Weather => {
@@ -56,11 +57,14 @@ export const findSpawnableTile = (
   placeKind: PlaceKind,
   x?: number,
   y?: number,
-  exclusions: Array<{ x: number; y: number }> = []
+  exclusions: Array<{ x: number; y: number }> = [],
+  placeId?: string
 ): { x: number; y: number } | null => {
   const excluded = new Set(exclusions.map((entry) => `${entry.x},${entry.y}`));
   const candidates: Array<{ x: number; y: number }> = [];
-  const places = Object.values(world.places ?? {}).filter((place) => place.kind === placeKind);
+  const places = Object.values(world.places ?? {}).filter((place) =>
+    place.kind === placeKind && (!placeId || place.id === placeId)
+  );
   for (const place of places) {
     for (let yy = place.y; yy < place.y + place.height; yy += 1) {
       for (let xx = place.x; xx < place.x + place.width; xx += 1) {
@@ -79,7 +83,7 @@ export const findSpawnableTile = (
 
 const spawnGroundItem = (world: WorldState, prefix: string, x: number, y: number, type: string, iconKey: string): void => {
   const id = nextItemId(world, prefix);
-  world.groundItems[id] = { id, x, y, type, iconKey };
+  placeGroundItemAt(world, { id, x, y, type, iconKey });
 };
 
 const spawnOutdoorHerb = (world: WorldState): void => {
@@ -111,6 +115,8 @@ type RegenSpec = {
   capacity: number;
   baseChance: number;
   placeKind: PlaceKind | "outdoor_grass";
+  /** 특정 place 안에서만 spawn (id 매칭). 없으면 placeKind 전체. */
+  placeId?: string;
   type: string;
   iconKey: string;
 };
@@ -123,7 +129,59 @@ const REGEN: RegenSpec[] = [
   { prefix: "ore", capacity: 6, baseChance: 0.008, placeKind: "mine", type: "material", iconKey: "item.material.ore" },
   { prefix: "coal", capacity: 4, baseChance: 0.006, placeKind: "mine", type: "material", iconKey: "item.material.coal" },
   { prefix: "clay", capacity: 6, baseChance: 0.008, placeKind: "pond", type: "material", iconKey: "item.material.clay" }
+  // 과일은 REGEN spec 아닌 tree structure 기반 (fruitTreeRegen 함수가 처리).
 ];
+
+/**
+ * 사용자 결정: 과일은 각 과일나무 structure 옆에서 자연스레 자란다 (REGEN spec X).
+ * tree.props.fruit = "apple" | "pineapple" 일 때 매 tick 작은 확률로 인접 빈 칸에 그 과일 ground spawn.
+ * 한 나무 인접 4칸에 같은 과일 ground 이미 1개 있으면 추가 X (한 나무 한 개체 시각 유지).
+ */
+const FRUIT_TREE_BASE_CHANCE = 0.0035; // tick 당 ~0.35% per 나무. 5그루면 ~1.75%/tick → 분 당 약 1개.
+const FRUIT_TREE_MAX_NEAR = 1;          // 나무 1개당 인접 ground 최대 1개 (한 개체 시각).
+
+export function fruitTreeRegen(world: WorldState): void {
+  const trees = Object.values(world.structures ?? {}).filter((s) =>
+    s.type === "tree" && typeof s.props?.fruit === "string"
+  );
+  if (trees.length === 0) return;
+  for (const tree of trees) {
+    const fruit = String(tree.props.fruit);
+    // 인접 4칸 내 이미 같은 fruit ground 있는지
+    const cx = tree.x + Math.floor(tree.width / 2);
+    const cy = tree.y + Math.floor(tree.height / 2);
+    let nearCount = 0;
+    for (const g of Object.values(world.groundItems)) {
+      if ((g.id.split("-")[0] ?? "") !== fruit) continue;
+      const d = Math.max(Math.abs(g.x - cx), Math.abs(g.y - cy));
+      if (d <= 2) nearCount += 1;
+    }
+    if (nearCount >= FRUIT_TREE_MAX_NEAR) continue;
+    if (Math.random() >= FRUIT_TREE_BASE_CHANCE) continue;
+    // 인접 빈 칸 후보 (4방향 + 대각)
+    const offsets = [{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1},{dx:1,dy:1},{dx:-1,dy:1},{dx:1,dy:-1},{dx:-1,dy:-1}];
+    const empty: Array<{x:number;y:number}> = [];
+    for (const o of offsets) {
+      const x = cx + o.dx; const y = cy + o.dy;
+      if (x < 0 || y < 0 || x >= world.map.width || y >= world.map.height) continue;
+      if (world.map.collision[y]?.[x] === 1) continue;
+      const occupied = Object.values(world.groundItems).some((g) => g.x === x && g.y === y);
+      if (!occupied) empty.push({ x, y });
+    }
+    if (empty.length === 0) continue;
+    const pick = empty[Math.floor(Math.random() * empty.length)];
+    const itemId = `${fruit}-${Math.random().toString(36).slice(2, 7)}`;
+    if (world.groundItems[itemId]) continue;
+    const iconKey = fruit === "apple" ? "item.food.apple"
+      : fruit === "pineapple" ? "item.food.pineapple"
+      : `item.food.${fruit}`;
+    const placed = placeGroundItemAt(world, {
+      id: itemId, x: pick.x, y: pick.y,
+      type: "food", iconKey
+    });
+    if (placed) world.revision += 1;
+  }
+}
 
 function trySpawnByCurve(
   world: WorldState,
@@ -174,7 +232,9 @@ function tickRegenerate(world: WorldState): void {
     if (weather === "windy") weatherMul = 0.7;
     if (weather === "fog" && spec.prefix === "mushroom") weatherMul *= 1.4;
     if (Math.random() >= chance * weatherMul) continue;
-    const tile = spec.placeKind === "outdoor_grass" ? pickGrassTile(world) : findSpawnableTile(world, spec.placeKind);
+    const tile = spec.placeKind === "outdoor_grass"
+      ? pickGrassTile(world)
+      : findSpawnableTile(world, spec.placeKind, undefined, undefined, [], spec.placeId);
     if (tile) spawnGroundItem(world, spec.prefix, tile.x, tile.y, spec.type, spec.iconKey);
   }
 }
@@ -189,7 +249,7 @@ const spawnTraveler = (world: WorldState, day: number): void => {
   world.actors[TRAVELER_ID] = {
     id: TRAVELER_ID,
     kind: "npc",
-    name: "Traveler",
+    name: "Noah",
     assetKey: "human.traveler",
     x: 22,
     y: 15,
@@ -229,6 +289,10 @@ export const tickWorldContext = (world: WorldState): void => {
   context.calendarDay = day;
   ensureEventSchedule(world);
 
+  // 사용자 결정 D: wellWaterLevel/carrotStock 0 이면 1회 정상값 보정 (이전 라이브 잔여 0 정리).
+  // 자동 시간 감소는 제거. 미래 NPC bucket USE 등 행동에 연결 시 별도 차감 로직.
+  if (context.resources.wellWaterLevel <= 0) context.resources.wellWaterLevel = 10;
+  if (context.resources.carrotStock <= 0) context.resources.carrotStock = 5;
   // 매 tick 자원 재생 (capacity 곡선 기반)
   tickRegenerate(world);
 
@@ -250,11 +314,7 @@ export const tickWorldContext = (world: WorldState): void => {
   if (!dayChanged) return;
   despawnExpiredTraveler(world, day);
 
-  context.resources.carrotStock = Math.max(0, context.resources.carrotStock - 2);
-  context.resources.wellWaterLevel = Math.max(0, context.resources.wellWaterLevel - 1);
-  if (weatherBeforeTick === "rain") {
-    context.resources.wellWaterLevel = Math.min(10, context.resources.wellWaterLevel + 3);
-  }
+  // 사용자 결정 D: wellWaterLevel/carrotStock 시간 기반 자동 감소 제거.
   spawnDailyResources(world);
 
   if (!context.activeIssue && day >= (context.nextHarvestFestivalDay ?? Infinity)) {
@@ -267,14 +327,8 @@ export const tickWorldContext = (world: WorldState): void => {
       text: ISSUE_TEXT.harvest_festival
     };
     context.nextHarvestFestivalDay = nextInDays(day, 7, 14);
-  } else if (!context.activeIssue && day >= (context.nextTravelerArrivalDay ?? Infinity)) {
-    spawnTraveler(world, day);
-    context.activeIssue = {
-      kind: "traveler_arrival",
-      until: world.tick + DAY_TICKS * 2,
-      text: ISSUE_TEXT.traveler_arrival
-    };
-    context.nextTravelerArrivalDay = nextInDays(day, 7, 10);
+  // 2026-05-08: traveler 주기 spawn 비활성. 사용자 결정 — Noah 등장 안 함.
+  // 향후 admin 으로 명시 spawn 하고 싶으면 spawnTraveler(world, day) 직접 호출.
   } else if (!context.activeIssue && Math.random() < 0.05) {
     const kinds = ["well_dry", "boar_pack", "low_harvest"] as const;
     const kind = kinds[Math.floor(Math.random() * kinds.length)];

@@ -30,5 +30,5 @@ export const createDefaultWorldContext = (tick = 0): WorldContext => ({
     carrotStock: 6,
     wellWaterLevel: 10
   },
-  calendarDay: Math.floor(tick / 2400)
+  calendarDay: Math.floor(tick / 1440)
 });

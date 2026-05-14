@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { WorldState } from "@wiw/shared";
 import { API_BASE } from "../net/endpoints";
+import { adminFetch, isAdmin } from "../net/adminAuth";
 
 type HistoryEntry = {
   tick: number;
@@ -70,16 +71,17 @@ export function Chronicle({
   const newestFirst = useMemo(() => [...entries].reverse(), [entries]);
 
   const regenerate = async () => {
+    if (!isAdmin()) return;
     try {
-      await fetch(`${API_BASE}/chronicle/regenerate`, { method: "POST" });
+      await adminFetch(`${API_BASE}/chronicle/regenerate`, { method: "POST" });
     } catch {}
   };
 
   if (newestFirstPages.length === 0 && newestFirst.length === 0) {
     return (
       <div>
-        <div className="empty">아직 연대기에 남을 큰 사건이 없어요.</div>
-        <button className="ghost-btn" style={{ marginTop: 8 }} onClick={regenerate}>지금까지 모은 사건으로 한 페이지 시도</button>
+        <div className="empty">No big events to chronicle yet.</div>
+        {isAdmin() && <button className="ghost-btn" style={{ marginTop: 8 }} onClick={regenerate}>Try a page from collected events</button>}
       </div>
     );
   }
@@ -89,8 +91,8 @@ export function Chronicle({
       {newestFirstPages.length > 0 && (
         <div style={{ marginBottom: 10 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <span style={{ fontSize: 11, color: "var(--text3)" }}>📓 LLM 이 쓴 일기 ({newestFirstPages.length})</span>
-            <button className="ghost-btn" style={{ fontSize: 10, padding: "2px 6px" }} onClick={regenerate}>재생성</button>
+            <span style={{ fontSize: 11, color: "var(--text3)" }}>📓 LLM journal ({newestFirstPages.length})</span>
+            {isAdmin() && <button className="ghost-btn" style={{ fontSize: 10, padding: "2px 6px" }} onClick={regenerate}>Regenerate</button>}
           </div>
           {newestFirstPages.map((p) => {
             const open = openPage === p.dayId;
@@ -104,7 +106,7 @@ export function Chronicle({
                   onClick={() => setOpenPage(open ? null : p.dayId)}
                   style={{ width: "100%", textAlign: "left", background: "transparent", border: "none", color: "inherit", cursor: "pointer", padding: 0 }}
                 >
-                  <div style={{ fontSize: 11, color: "var(--text3)" }}>Day {p.dayIndex} · {p.model} · {p.milestoneCount}건의 사건</div>
+                  <div style={{ fontSize: 11, color: "var(--text3)" }}>Day {p.dayIndex} · {p.model} · {p.milestoneCount} events</div>
                   <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>{p.title}</div>
                 </button>
                 <div style={{ marginTop: 6, fontSize: 12, color: "var(--text)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
@@ -117,7 +119,7 @@ export function Chronicle({
                 )}
                 {open && p.milestones.length > 0 && (
                   <div style={{ marginTop: 8, fontSize: 10, color: "var(--text3)" }}>
-                    <div style={{ marginBottom: 4 }}>그날의 사건 목록</div>
+                    <div style={{ marginBottom: 4 }}>Events of the day</div>
                     {p.milestones.map((m, i) => (
                       <div key={i}>· tick {m.tick} {m.kind}{m.actorId ? ` (${world?.actors[m.actorId]?.name ?? m.actorId})` : ""}: {m.text}</div>
                     ))}

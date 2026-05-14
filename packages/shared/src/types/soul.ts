@@ -1,14 +1,90 @@
-export type SoulRole = "baker" | "farmer" | "merchant" | "guard" | "hero" | "wanderer";
+// ── PR1: plan-driven hierarchical sub-intent ────────────────────────────
+/**
+ * WAIT_UNTIL condition — structured object only. DSL 금지 (파싱 안전).
+ * 모든 WAIT 에 maxTicks 강제.
+ */
+export type WaitCondition =
+  | { kind: "tick_at"; tick: number }
+  | { kind: "tick_after"; ticks: number }
+  | { kind: "time_of_day"; hour: number }
+  | { kind: "actor_within"; actorId: string; distance: number }
+  | { kind: "crop_mature"; cropId?: string }   // cropId 미지정 시 last_planted (executor가 step context에서 해석)
+  | { kind: "weather"; weather: string }
+  | { kind: "inventory_has"; item: string; count: number }
+  | { kind: "idle"; ticks: number };
+
+export type GatherLocation = { placeId?: string; xy?: { x: number; y: number }; radius?: number };
+export type CraftStation = { objectId?: string; stationType?: string; placeId?: string };
+export type TalkIntent = "request" | "inform" | "greet" | "trade" | "apologize";
+
+export type PlanStep =
+  | { kind: "GO_TO"; placeId?: string; xy?: { x: number; y: number }; nearItem?: string; nearActor?: string }
+  | { kind: "GATHER"; item: string; count: number; location?: GatherLocation; allowWaitSpawn?: boolean; maxTicks?: number }
+  | { kind: "CRAFT"; output: string; count?: number; station?: CraftStation }
+  | { kind: "TALK_TO"; actorId?: string; topic?: string; intent?: TalkIntent; message?: string }
+  | { kind: "USE"; item?: string; objectId?: string; targetItemId?: string }
+  | { kind: "WAIT_UNTIL"; condition: WaitCondition; maxTicks: number };
+
+export type PlanStepStatus = "pending" | "running" | "done" | "failed" | "skipped";
+
+export interface PlanStepRuntime {
+  status: PlanStepStatus;
+  /** step 시작 tick. plan progress 계측용. */
+  startedAtTick?: number;
+  /** step 종료 tick (done/failed). */
+  endedAtTick?: number;
+  /** retry 카운트 */
+  retryCount?: number;
+  /** 마지막 실패 사유 */
+  lastFailReason?: string;
+  /** executor 가 step 진행 중 보존하는 보조 상태 (예: USE seed 후 cropId, 이동 중 좌표) */
+  context?: Record<string, unknown>;
+}
+
+/**
+ * Plan — LLM 이 만드는 멀티스텝 의도. 시스템(executor)이 한 step 씩 자동 실행.
+ * planMode: "off" | "shadow" | "assist" | "full" 로 점진 활성화.
+ */
+export interface Plan {
+  id: string;
+  goal: string;
+  reason?: string;
+  /** plan 자체 만료. clamp(estimatedCost*3, 100, 1200) 권장. */
+  ttlTicks: number;
+  startedAtTick: number;
+  steps: PlanStep[];
+  /** 각 step 의 runtime status. 길이 = steps.length */
+  stepRuntimes: PlanStepRuntime[];
+  currentStep: number;
+  status: "active" | "paused" | "done" | "failed" | "abandoned";
+  pauseReason?: string;
+  /** plan 전체 실패 카운트. failureBudget 초과 시 abandon. */
+  failureCount: number;
+  failureBudget: number;
+  /** 누가 만든 plan (model id) */
+  createdBy?: string;
+  /** plan 수정 횟수 (revise) */
+  reviseCount?: number;
+}
 
 export interface Soul {
   actorId: string;
   name: string;
-  role?: SoulRole;
   backstory: string;
   persona: string;
   goals: string[];
   tone: string;
   values: string[];
+  seedValues?: string[];
+  seedGoals?: string[];
+  lifeEvents?: Array<{ tick: number; text: string; evidence: string[]; importance: number }>;
+  personaShifts?: Array<{ tick: number; text: string; evidence: string[]; viaAction: "SLEEP" | "THINK" }>;
+  lastValuesDriftTick?: number;
+  lastGoalsDriftTick?: number;
+  lastLifeEventTick?: number;
+  lastPersonaShiftTick?: number;
+  /** Canonical milestone keys this actor has already achieved (first_kill, first_meeting:<id>, etc.). Prevents re-emit. */
+  milestonesAchieved?: string[];
   /** 신의 사도(follower) 여부 — true 이면 사용자(신)의 신탁을 절대 우선으로 따른다. */
   isFollower?: boolean;
   /** 신탁 누적 강도(0~1). 신탁을 받을 때마다 살짝 올라가고, 영혼 결에 영향을 준다. */
@@ -50,6 +126,8 @@ export interface Soul {
     path?: Array<{ dx: number; dy: number }>;
     lastReplanTick?: number;
     lastReconsiderTick?: number;
+    /** PR1: plan-driven 확장. 있으면 executor 가 우선. 없으면 legacy atomic 경로. */
+    plan?: Plan;
   };
   updatedAt: number;
 }
@@ -63,6 +141,18 @@ export interface Thought {
   priority: string;
   emotion: string;
   nextIntent: string;
+  /** Rolling per-beat history (last ~6). Combines what I was thinking AND what I did/why on the same beat
+   *  so the inner-state-to-action through-line is visible in one timeline instead of two redundant blocks. */
+  beatHistory?: Array<{
+    tick: number;
+    priority: string;
+    emotion: string;
+    nextIntent: string;
+    action?: { type: string; reason?: string; result: string };
+  }>;
+  /** Rolling agenda lifecycle (CHANGE/COMPLETE/ABANDON) recap, last ~3.
+   *  Kept separate from beatHistory because pivots are coarser-grained semantic events. */
+  agendaHistory?: Array<{ tick: number; kind: "CHANGE" | "COMPLETE" | "ABANDON"; intent: string; reason?: string }>;
   activePath?: {
     targetXY: { x: number; y: number };
     targetPlaceId?: string;
@@ -88,12 +178,21 @@ export interface Observation {
   tags: string[];
   importance: number;
   embedding?: number[];
+  /** 2026-05-09 PR-1: heard_claim 메타. tags에 "heard_claim" 포함 시 활용. */
+  claimKey?: string;        // "craft:iron_sword|forge", "place:forest-east", "resource:wood@forest-east"
+  claimType?: "recipe_hint" | "place_hint" | "resource_location" | "danger_warning";
+  speaker?: string;         // 발언한 actor id
+  factPayload?: Record<string, unknown>;
 }
 
 export interface Relationship {
   from: string;
   to: string;
   affinity: number;
+  /** 2026-05-09: information trust (0..1). affinity 와 직교 — "싫어하지만 정확한 정보를 주는 NPC" 표현 가능. mentor seed 시 1.0. */
+  trust?: number;
+  /** trust 검증 이벤트 누적 (claim → 실제 결과 비교). 0 일 때 "근거 없음 중립". */
+  trustEvidenceCount?: number;
   lastInteractionTick: number;
   notes: string;
 }
@@ -104,73 +203,72 @@ export interface Relationship {
  */
 const PERSONA_SEEDS: Record<string, Partial<Soul>> = {
   "player-1": {
-    backstory: "낯선 길을 따라 마을에 들어온 새 방문자. 가진 것은 많지 않지만, 사람들의 말과 풍경을 오래 바라보며 자기 자리를 천천히 찾는다.",
-    persona: "조심스럽고 다정함, 처음 보는 물건은 꼭 한 번 만져봄.",
-    tone: "예의 바르고 담백한 말투.",
-    values: ["배움", "신뢰", "생존", "선택"],
-    goals: ["마을에 익숙해지기", "믿을 만한 관계 만들기", "스스로의 길 찾기"]
+    backstory: "A new visitor who wandered into the village from an unfamiliar road. Few possessions; finds his place slowly by watching people and landscapes.",
+    persona: "Cautious and kind; touches every new object once before trusting it.",
+    tone: "Polite and plain.",
+    values: ["learning", "trust", "survival", "choice"],
+    goals: ["become familiar with the village", "build trustworthy relationships", "find his own path"]
   },
   "npc-1": {
-    backstory: "밀과 당근이 자라는 텃밭 곁에서 계절의 변화를 제일 먼저 알아차리는 사람. 흙 묻은 손으로도 손님에게 차 한 잔을 내미는 법을 잊지 않는다.",
-    persona: "느긋하고 관찰력 있음, 날씨 이야기를 자주 꺼냄.",
-    tone: "구수하고 부드러운 말투.",
-    values: ["안정", "나눔", "인내", "자연"],
-    goals: ["텃밭을 건강히 돌보기", "마을 소식 챙기기", "새로운 취미를 하나 배워보기"]
+    backstory: "Lives by a field of wheat and carrots. First to notice each turn of the season. Hands earth-stained, yet always offers a guest a cup of tea.",
+    persona: "Easygoing and observant; loves to talk about the weather.",
+    tone: "Warm and gentle.",
+    values: ["stability", "sharing", "patience", "nature"],
+    goals: ["tend the field well", "keep up with village news", "pick up a new hobby"]
   },
   "npc-2": {
-    backstory: "햇살 빵집의 주인으로, 아침마다 오븐 앞에서 마을이 깨어나는 소리를 듣는다. 빵 굽는 일에 익숙하지만, 손님이 남긴 이야기나 낯선 재료에도 쉽게 마음이 간다.",
-    persona: "따뜻하고 장난기 있음, 생각할 때 앞치마 끝을 만짐.",
-    tone: "포근하고 살짝 농담 섞인 말투.",
-    values: ["환대", "정성", "실험", "기억"],
-    goals: ["사람들이 쉬어 갈 곳 만들기", "새 조합 시도하기", "빵집 밖의 일에도 참여하기"]
+    backstory: "Owner of the Sunny Bakery; hears the village wake each morning by the oven. Skilled at baking, but easily drawn to a guest's story or an unfamiliar ingredient.",
+    persona: "Warm and playful; fidgets with the apron when thinking.",
+    tone: "Cozy with a touch of humor.",
+    values: ["hospitality", "care", "experiment", "memory"],
+    goals: ["make a place where people can rest", "try new combinations", "engage in matters beyond the bakery"]
   },
   "npc-3": {
-    backstory: "모퉁이 잡화점과 연금대 사이에서 작은 물건들의 쓸모를 발견하는 사람. 겉으로는 계산이 빠르지만, 오래된 병이나 이상한 씨앗에도 이름을 붙여 준다.",
-    persona: "영리하고 호기심 많음, 물건을 줄 맞춰 놓음.",
-    tone: "또렷하고 산뜻한 말투.",
-    values: ["발견", "공정함", "독립", "가능성"],
-    goals: ["쓸모 있는 물건 모으기", "사람들의 필요 알아차리기", "새로운 제작법 탐색하기"]
+    backstory: "Finds purpose for small things between the corner shop and the alchemy table. Sharp at numbers on the surface, but names old vials and odd seeds with affection.",
+    persona: "Clever and curious; arranges items in neat rows.",
+    tone: "Crisp and bright.",
+    values: ["discovery", "fairness", "independence", "possibility"],
+    goals: ["collect useful objects", "notice what people need", "explore new recipes"]
   },
   "npc-4": {
-    backstory: "광산 입구와 대장간 근처의 작은 오두막에서 지내며, 마을의 밤소리에 귀가 밝다. 단단한 사람처럼 보이지만 낡은 도구를 고칠 때는 유난히 조심스럽다.",
-    persona: "침착하고 책임감 있음, 말보다 고개 끄덕임이 먼저 나옴.",
-    tone: "짧고 믿음직한 말투.",
-    values: ["보호", "절제", "책임", "기술"],
-    goals: ["위험한 곳 살피기", "필요한 도구 익히기", "마을 사람들과 거리 좁히기"]
+    backstory: "Lives in a small cabin near the mine and the forge; ears tuned to the village's night sounds. Looks tough, but mends old tools with great care.",
+    persona: "Calm and responsible; nods before speaking.",
+    tone: "Short and dependable.",
+    values: ["protection", "restraint", "responsibility", "craft"],
+    goals: ["watch over dangerous places", "master needed tools", "close the distance with the villagers"]
   },
   "traveler-1": {
-    backstory: "마을 외곽에 머무는 떠돌이로, 오래 머물겠다는 약속은 잘 하지 않는다. 대신 지나온 길의 냄새와 노래를 기억해 두었다가 모닥불 곁에서 조금씩 풀어놓는다.",
-    persona: "자유롭고 변덕스러움, 지도를 거꾸로 보기도 함.",
-    tone: "가볍고 은근히 시적인 말투.",
-    values: ["자유", "이야기", "우연", "생존"],
-    goals: ["다음 길 정하기", "마을의 비밀 듣기", "잠시라도 머물 이유 찾기"]
+    backstory: "A wanderer at the village edge; rarely promises to stay long. Instead, holds the scents and songs of past roads and lets them out by the campfire.",
+    persona: "Free and capricious; sometimes reads maps upside-down.",
+    tone: "Light and quietly poetic.",
+    values: ["freedom", "story", "chance", "survival"],
+    goals: ["pick the next road", "hear the village's secrets", "find a reason to linger a while"]
   }
 };
 
-export const DEFAULT_SOUL = (actorId: string, name: string, role?: SoulRole): Soul => {
+export const DEFAULT_SOUL = (actorId: string, name: string): Soul => {
   const seed = PERSONA_SEEDS[actorId];
   return {
     actorId,
     name,
-    role,
-    backstory: seed?.backstory ?? `${name}은(는) 이 마을에서 조용히 살아가는 사람입니다.`,
-    persona: seed?.persona ?? "호기심 많고 느긋함",
-    goals: seed?.goals ?? ["하루를 무사히 보낸다", "마을 사람들과 잘 지낸다"],
-    tone: seed?.tone ?? "따뜻하고 담백",
-    values: seed?.values ?? ["안전", "호기심"],
+    backstory: seed?.backstory ?? `${name} lives quietly in this village.`,
+    persona: seed?.persona ?? "Curious and easygoing",
+    goals: seed?.goals ?? ["get through the day safely", "stay on good terms with the villagers"],
+    tone: seed?.tone ?? "Warm and plain",
+    values: seed?.values ?? ["safety", "curiosity"],
     updatedAt: Date.now()
   };
 };
 
-/** 기존 default 텍스트로 저장된 soul 을 풍부한 시드로 갱신할 때 쓰는 헬퍼. */
+/** Helper to detect default-text souls and refresh them with rich seeds. */
 export const isDefaultSoulText = (s: Soul): boolean => {
-  return s.persona === "호기심 많고 느긋함"
-    && (s.backstory ?? "").includes("조용히 살아가는 사람");
+  return (s.persona === "호기심 많고 느긋함" || s.persona === "Curious and easygoing")
+    && ((s.backstory ?? "").includes("조용히 살아가는 사람") || (s.backstory ?? "").includes("lives quietly in this village"));
 };
 export const enrichSoulFromSeed = (s: Soul): Soul => {
   const seed = PERSONA_SEEDS[s.actorId];
   if (!seed) return s;
-  return { ...s, ...seed, actorId: s.actorId, name: s.name, role: s.role, updatedAt: Date.now() };
+  return { ...s, ...seed, actorId: s.actorId, name: s.name, updatedAt: Date.now() };
 };
 
 export const DEFAULT_THOUGHT = (actorId: string, tick: number): Thought => ({
@@ -179,7 +277,7 @@ export const DEFAULT_THOUGHT = (actorId: string, tick: number): Thought => ({
   updatedAtMs: Date.now(),
   recentEvents: [],
   beliefs: [],
-  priority: "주변을 둘러본다",
-  emotion: "평온",
+  priority: "pause briefly and decide what to do next",
+  emotion: "calm",
   nextIntent: "WAIT"
 });

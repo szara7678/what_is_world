@@ -1,5 +1,5 @@
-import type { Actor, Observation, Place, Soul, SoulRole, Thought, WorldState } from "@wiw/shared";
-import { findPath } from "@wiw/world-core";
+import type { Actor, Observation, Place, Soul, Thought, WorldState } from "@wiw/shared";
+import { findPath, placeGroundItemAt } from "@wiw/world-core";
 import { recordHistory } from "../logging/historyLogStore";
 import type { BrainDecision } from "./prompt";
 
@@ -203,13 +203,6 @@ function useDecision(itemId: string, priority: string, beliefs: string[] = []): 
   };
 }
 
-function sellDecision(target: Actor, itemId: string, priority: string, beliefs: string[] = []): BrainDecision {
-  return {
-    thought: { priority, emotion: "즐거움", nextIntent: "SELL", beliefs, recentEvents: [] },
-    action: { type: "SELL", targetId: target.id, itemId }
-  };
-}
-
 function isFoodItemId(itemId: string): boolean {
   return itemId.startsWith("carrot") || itemId.startsWith("wheat") || itemId.startsWith("herb");
 }
@@ -234,13 +227,19 @@ function nearestNeighbor(world: WorldState, me: Actor, maxDist = 3): { actor: Ac
     .sort((a, b) => a.dist - b.dist)[0] ?? null;
 }
 
-function roleFor(me: Actor, soul: Soul): SoulRole {
-  if (soul.role) return soul.role;
+function mockLaneFor(me: Actor, soul: Soul): "baker" | "farmer" | "merchant" | "guard" | "hero" | "wanderer" {
   if (me.id === "player-1") return "hero";
-  if (me.id === "npc-1") return "farmer";
-  if (me.id === "npc-2" || me.name.toLowerCase().includes("baker")) return "baker";
-  if (me.id === "npc-3") return "merchant";
-  if (me.id === "npc-4") return "guard";
+  const tags = [
+    me.name,
+    soul.backstory,
+    soul.persona,
+    ...(soul.values ?? []),
+    ...(soul.goals ?? [])
+  ].join(" ").toLowerCase();
+  if (/\bbakery\b|\bbaker\b|\bbread\b|\boven\b|hospitality/.test(tags)) return "baker";
+  if (/\bfield\b|\bfarm\b|\bwheat\b|\bcarrot\b|nature|harvest|weather/.test(tags)) return "farmer";
+  if (/\bshop\b|\bstore\b|\bmerchant\b|trade|fairness|numbers|alchemy|useful objects/.test(tags)) return "merchant";
+  if (/guard|protect|protection|danger|responsibility|patrol|forge|mine/.test(tags)) return "guard";
   return "wanderer";
 }
 
@@ -255,14 +254,14 @@ function nextItemId(world: WorldState, prefix: string): string {
 }
 
 function placeProducedItem(world: WorldState, itemId: string, place: Place, type: string, iconKey: string): void {
-  world.groundItems[itemId] = {
+  const placed = placeGroundItemAt(world, {
     id: itemId,
     x: place.x + Math.min(1, place.width - 1),
     y: place.y + Math.min(1, place.height - 1),
     type,
     iconKey
-  };
-  world.revision += 1;
+  });
+  if (placed) world.revision += 1;
 }
 
 function groundItemByPrefixInPlace(world: WorldState, prefix: string, place: Place): { id: string; x: number; y: number } | null {
@@ -308,24 +307,9 @@ function recordProduced(kind: "carrot", world: WorldState, actor: Actor, itemId:
   });
 }
 
-function customerNearShopkeeper(world: WorldState, me: Actor): Actor | null {
-  return Object.values(world.actors)
-    .filter((actor) => actor.id !== me.id && actor.alive && actor.kind !== "monster" && manhattan(actor, me) <= 1)
-    .sort((a, b) => manhattan(a, me) - manhattan(b, me))[0] ?? null;
-}
-
-function maybeSellFromInventory(world: WorldState, me: Actor, prefixes: string[]): BrainDecision | null {
-  const customer = customerNearShopkeeper(world, me);
-  if (!customer || customer.inventory.length >= 8) return null;
-  const slot = me.inventory.find((s) => prefixes.some((p) => s.item === p));
-  if (!slot) return null;
-  const key = slot.item;
-  return sellDecision(customer, key, `${customer.name}에게 ${key}을(를) 판다`, [`${customer.name}이(가) 가게 가까이에 있다`]);
-}
-
 function restockInventory(world: WorldState, me: Actor, prefix: string, max = 2): void {
   const count = me.inventory.reduce((n, s) => n + (s.item === prefix ? (s.kind === "stack" ? s.count : 1) : 0), 0);
-  if (count >= max || me.inventory.length >= 8) return;
+  if (count >= max || me.inventory.length >= 14) return;
   // helper 직접 호출은 mock 의 의도를 살림 — instance 면 instance, stackable 이면 stack
   const id = nextItemId(world, prefix);
   // catalog stackable 여부에 따라 슬롯 종류 결정
@@ -653,8 +637,6 @@ function decideForMerchant(world: WorldState, me: Actor): BrainDecision {
       return waitDecision(`${store.name}으로 들어갈 길을 찾는다`, ["가게 안에 아직 도착하지 못했다"], "피곤함");
     }
     restockInventory(world, me, "potion-heal", 1);
-    const sale = maybeSellFromInventory(world, me, ["potion-heal"]);
-    if (sale) return sale;
     if (Math.random() < 0.45) {
       const target = nearestNeighbor(world, me, 4);
       return speakDecision("필요한 물건 있으면 둘러보세요.", target?.actor.id, `${store.name}에서 손님을 맞는다`, ["잡화점 영업 중이다"]);
@@ -877,8 +859,8 @@ export function decideWithMock(args: {
   const oracle = decideForOracle(world, me, soul, memories);
   if (oracle) return oracle;
 
-  const role = roleFor(me, soul);
-  switch (role) {
+  const lane = mockLaneFor(me, soul);
+  switch (lane) {
     case "baker":
       return decideForBaker(world, me);
     case "farmer":

@@ -1,0 +1,24 @@
+[Unit]
+Description=what_is_world generative-agent server
+After=network.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=insu
+WorkingDirectory=/home/insu/insu_server/apps/what_is_world/apps/server
+EnvironmentFile=/home/insu/insu_server/apps/what_is_world/.env
+ExecStart=/home/insu/.nvm/versions/node/v22.22.2/bin/node dist/main.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/wiw/server.log
+StandardError=append:/var/log/wiw/server.log
+
+# Allow ollama embedding endpoint + ChatGPT direct + Codex OAuth file in HOME
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

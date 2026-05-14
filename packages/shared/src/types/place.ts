@@ -1,6 +1,6 @@
-export type PlaceKind = "plaza" | "well" | "shop" | "home" | "field" | "forest_edge" | "road" | "tavern" | "shrine" | "mine" | "pond" | "noticeboard";
+export type PlaceKind = "plaza" | "well" | "shop" | "home" | "field" | "forest_edge" | "road" | "tavern" | "shrine" | "mine" | "pond" | "noticeboard" | "smithy";
 
-export type PlaceAction = "WAIT" | "SPEAK" | "USE" | "WORK" | "REST" | "BUY" | "SELL" | "PRAY";
+export type PlaceAction = "WAIT" | "SPEAK" | "USE" | "WORK" | "REST" | "PRAY";
 
 export interface Place {
   id: string;

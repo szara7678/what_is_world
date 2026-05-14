@@ -1,5 +1,5 @@
 import type { Actor, WorldState } from "@wiw/shared";
-import { createDefaultSkills } from "@wiw/world-core";
+import { createDefaultSkills, placeGroundItemAt } from "@wiw/world-core";
 
 const id = (prefix: string): string => `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -48,7 +48,6 @@ export const placeGroundItem = (
   iconKey?: string
 ): { id: string; x: number; y: number; type: string; iconKey?: string } => {
   const item = { id: id("item"), x, y, type, iconKey };
-  world.groundItems[item.id] = item;
-  world.revision += 1;
-  return item;
+  if (placeGroundItemAt(world, item)) world.revision += 1;
+  return world.groundItems[item.id] ?? item;
 };

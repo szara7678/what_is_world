@@ -31,7 +31,7 @@ async function flush(): Promise<void> {
           const before = prev.affinity;
           prev.affinity = clamp(prev.affinity + b.delta, -100, 100);
           prev.lastInteractionTick = b.tick;
-          prev.notes = b.note;
+          prev.notes = mergeRelationshipNotes(prev.notes, b.note);
           await recordRelationshipThreshold(b, before, prev.affinity);
         } else {
           const baseline = baselineRelationship(b.from, b.to);
@@ -41,7 +41,7 @@ async function flush(): Promise<void> {
             to: b.to,
             affinity,
             lastInteractionTick: b.tick,
-            notes: baseline.note ? `${baseline.note}; ${b.note}` : b.note
+            notes: mergeRelationshipNotes(baseline.note ?? "", b.note)
           });
           await recordRelationshipThreshold(b, baseline.affinity, affinity);
         }
@@ -70,6 +70,18 @@ function baselineRelationship(from: string, to: string): { affinity: number; not
     return { affinity: 5, note: "마을 자경단 신뢰" };
   }
   return { affinity: 0 };
+}
+
+function mergeRelationshipNotes(existing: string, next: string): string {
+  const notes = [...existing.split(/\n|;/), next]
+    .map((note) => note.trim())
+    .filter(Boolean);
+  const distinct: string[] = [];
+  for (const note of notes) {
+    if (distinct.includes(note)) continue;
+    distinct.push(note);
+  }
+  return distinct.slice(-3).join("\n");
 }
 
 function clamp(n: number, lo: number, hi: number): number {

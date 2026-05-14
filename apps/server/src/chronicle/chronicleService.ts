@@ -14,7 +14,7 @@ import { listSouls, readObservations } from "../persistence/soulStore";
 const PAGES_FILE = resolve(process.cwd(), "data/chronicle_pages.json");
 const RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 const AUTH_PATH = `${process.env.HOME}/.codex/auth.json`;
-const TICKS_PER_DAY = 1600; // server tickWorld 의 sim-day 길이와 동기 (24h / 0.015h per tick ≈ 1600)
+const TICKS_PER_DAY = 1440; // 2026-05-06: server tickWorld 1 tick = 1 game min, 1 day = 1440 tick
 
 export interface ChroniclePage {
   dayId: string;          // "day-1", "day-2", ...

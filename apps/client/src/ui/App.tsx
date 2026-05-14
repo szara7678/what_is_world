@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WorldState } from "@wiw/shared";
+import { ko } from "@wiw/shared";
 import {
   startGame,
   TILESET_COLS,
@@ -12,6 +13,8 @@ import {
 } from "../game/startGame";
 import { joinWorld, sendMessage } from "../net/room";
 import { API_BASE } from "../net/endpoints";
+import { adminFetch, isAdmin } from "../net/adminAuth";
+import { displayActorName } from "./ObservatoryShell";
 import { useEventFeed } from "./useEventFeed";
 import "./App.css";
 
@@ -29,8 +32,8 @@ interface SpawnName { npc: string; animal: string; }
 interface CatalogEntry { key: string; path: string; }
 interface GroupedEntry { groupKey: string; label: string; rep: CatalogEntry; }
 
-// 액션 접미사 목록 (기본남_걷기_001 → 기본남 로 그룹핑)
-const HUMAN_ACTION_SUFFIXES = ["_걷기", "_대기", "_기본공격", "_기쁨", "_승리", "_식사", "_아픔", "_달리기"];
+// 액션 접미사 목록 (Default남_걷기_001 → Default남 로 그룹핑)
+const HUMAN_ACTION_SUFFIXES = ["_걷기", "_대기", "_DefaultAttack", "_기쁨", "_승리", "_식사", "_아픔", "_달리기"];
 
 function extractHumanBaseName(key: string): string {
   const lastPart = key.split(".").pop() ?? "";
@@ -49,7 +52,7 @@ function groupHumans(items: CatalogEntry[], search: string): GroupedEntry[] {
     if (!groups.has(baseName)) {
       groups.set(baseName, { groupKey: baseName, label: baseName, rep: item });
     } else {
-      // 대기_001 프레임을 대표 이미지로 우선 사용
+      // 대기_001 프레임을 대표 이미지로 우선 used
       const lastPart = item.key.split(".").pop() ?? "";
       if (lastPart.includes("_대기_001")) {
         groups.get(baseName)!.rep = item;
@@ -121,11 +124,11 @@ function TilesetPicker({
   const [imgLoaded, setImgLoaded] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const mochiTiles = [
-    { label: "잔디", tileId: 1, path: "/static/tile/모찌마을/grass-base.png" },
-    { label: "광장", tileId: 2, path: "/static/tile/모찌마을/plaza-center.png" },
-    { label: "흙길", tileId: 3, path: "/static/tile/모찌마을/road-dirt.png" },
-    { label: "텃밭", tileId: 4, path: "/static/tile/모찌마을/grass-tuft.png" },
-    { label: "가게", tileId: 5, path: "/static/tile/모찌마을/cobble-center.png" }
+    { label: "Grass", tileId: 1, path: "/static/tile/모찌마을/grass-base.png" },
+    { label: "Plaza", tileId: 2, path: "/static/tile/모찌마을/plaza-center.png" },
+    { label: "Dirt road", tileId: 3, path: "/static/tile/모찌마을/road-dirt.png" },
+    { label: "Field", tileId: 4, path: "/static/tile/모찌마을/grass-tuft.png" },
+    { label: "Shop", tileId: 5, path: "/static/tile/모찌마을/cobble-center.png" }
   ];
 
   const drawOverlay = useCallback(
@@ -167,8 +170,8 @@ function TilesetPicker({
   return (
     <div>
       <div className="mochi-tile-head">
-        <span>모찌 추천</span>
-        <button className="mini-toggle" onClick={() => setShowAll((v) => !v)}>{showAll ? "접기" : "전체 보기"}</button>
+        <span>Mochi recommended</span>
+        <button className="mini-toggle" onClick={() => setShowAll((v) => !v)}>{showAll ? "Hide" : "Show all"}</button>
       </div>
       <div className="mochi-tile-grid">
         {mochiTiles.map((tile) => (
@@ -203,7 +206,7 @@ function TilesetPicker({
         </div>
       )}
       <div className="tile-info">
-        선택된 타일: #{selectedTile} &nbsp;(col {selectedTile % TILESET_COLS}, row {Math.floor(selectedTile / TILESET_COLS)})
+        Selected tile: #{selectedTile} &nbsp;(col {selectedTile % TILESET_COLS}, row {Math.floor(selectedTile / TILESET_COLS)})
       </div>
     </div>
   );
@@ -220,7 +223,8 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
   const hpPct = a.maxHp > 0 ? (a.hp / a.maxHp) * 100 : 100;
   const mpPct = a.maxMp > 0 ? (a.mp / a.maxMp) * 100 : 100;
   const stPct = a.maxStamina > 0 ? (a.stamina / a.maxStamina) * 100 : 100;
-  const hgPct = Math.min(100, Math.max(0, a.hunger));
+  const maxHunger = (a as { maxHunger?: number }).maxHunger ?? 100;
+  const hgPct = Math.min(100, Math.max(0, (a.hunger / Math.max(1, maxHunger)) * 100));
   const skills = (a.skills ?? []) as Array<{ id: string; name: string; level: number; xp?: number; type?: string; description?: string }>;
   const status = a.status ?? { strength: 5, dexterity: 5, constitution: 5, intelligence: 5 };
   const inv = a.inventory ?? [];
@@ -228,11 +232,20 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
   const xpForNext = (lv: number) => SKILL_THRESHOLDS[Math.min(lv + 1, SKILL_THRESHOLDS.length - 1)];
 
   const [extra, setExtra] = useState<ActorSoulSnap>({});
+  const [model, setModel] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     fetch(`${BASE_URL}/agent/${encodeURIComponent(a.id)}/snapshot`)
       .then((r) => r.json())
       .then((d) => { if (!cancelled) setExtra(d as ActorSoulSnap); })
+      .catch(() => undefined);
+    fetch(`${BASE_URL}/config/brain`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        const cfg = (d?.config ?? d) as { model?: string; modelOverrides?: Record<string, string> };
+        setModel(cfg?.modelOverrides?.[a.id] ?? cfg?.model ?? null);
+      })
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, [a.id]);
@@ -257,6 +270,12 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
           <span className="inspector-label">Position</span>
           <span className="inspector-value">({a.x.toFixed(1)}, {a.y.toFixed(1)})</span>
         </div>
+        {model !== null && (
+          <div className="inspector-row">
+            <span className="inspector-label">Model</span>
+            <span className="inspector-value" style={{ fontFamily: "monospace", fontSize: 10, color: model.includes("mini") ? "var(--text2)" : "#3fb950" }}>{model}</span>
+          </div>
+        )}
       </div>
 
       <div className="inspector-section">
@@ -287,7 +306,7 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
           <div className="hp-bar-wrap">
             <div className="hp-bar-fill" style={{ width: `${hgPct}%`, background: hgPct > 80 ? "#e94560" : hgPct > 50 ? "#d29922" : "#3fb950" }} />
           </div>
-          <span style={{ fontSize: 10, color: "var(--text2)", minWidth: 44 }}>{Math.round(a.hunger)}/100</span>
+          <span style={{ fontSize: 10, color: "var(--text2)", minWidth: 44 }}>{Math.round(a.hunger)}/{maxHunger}</span>
         </div>
         <div className="inspector-row">
           <span className="inspector-label">Gold</span>
@@ -297,10 +316,10 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
 
       <div className="inspector-section">
         <div className="inspector-section-title">Status</div>
-        <div className="inspector-row"><span className="inspector-label">힘 STR</span><span className="inspector-value">{status.strength}</span></div>
-        <div className="inspector-row"><span className="inspector-label">민첩 DEX</span><span className="inspector-value">{status.dexterity}</span></div>
-        <div className="inspector-row"><span className="inspector-label">체력 CON</span><span className="inspector-value">{status.constitution}</span></div>
-        <div className="inspector-row"><span className="inspector-label">지능 INT</span><span className="inspector-value">{status.intelligence}</span></div>
+        <div className="inspector-row"><span className="inspector-label">STR</span><span className="inspector-value">{status.strength}</span></div>
+        <div className="inspector-row"><span className="inspector-label">DEX</span><span className="inspector-value">{status.dexterity}</span></div>
+        <div className="inspector-row"><span className="inspector-label">CON</span><span className="inspector-value">{status.constitution}</span></div>
+        <div className="inspector-row"><span className="inspector-label">INT</span><span className="inspector-value">{status.intelligence}</span></div>
       </div>
 
       <div className="inspector-section">
@@ -329,13 +348,14 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
       <div className="inspector-section">
         <div className="inspector-section-title">Inventory ({inv.length})</div>
         {inv.length === 0 ? (
-          <div style={{ fontSize: 10, color: "var(--text2)" }}>비어 있음</div>
+          <div style={{ fontSize: 10, color: "var(--text2)" }}>empty</div>
         ) : (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {inv.map((slot, i) => {
-              const label = slot.kind === "stack" ? `${slot.item} × ${slot.count}` : slot.item;
+              const korItem = ko.items(slot.item);
+              const label = slot.kind === "stack" ? `${korItem} × ${slot.count}` : korItem;
               return (
-                <span key={`${slot.item}-${i}`} style={{ fontSize: 10, padding: "2px 6px", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 4 }}>{label}</span>
+                <span key={`${slot.item}-${i}`} title={slot.item} style={{ fontSize: 10, padding: "2px 6px", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 4 }}>{label}</span>
               );
             })}
           </div>
@@ -346,9 +366,9 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
         <div className="inspector-section">
           <div className="inspector-section-title">Persona</div>
           {extra.soul.persona && <div style={{ fontSize: 11, color: "var(--text)", marginBottom: 4 }}>{extra.soul.persona}</div>}
-          {extra.soul.tone && <div className="inspector-row"><span className="inspector-label">어조</span><span className="inspector-value">{extra.soul.tone}</span></div>}
-          {extra.soul.values && extra.soul.values.length > 0 && <div className="inspector-row"><span className="inspector-label">가치</span><span className="inspector-value">{extra.soul.values.join(", ")}</span></div>}
-          {extra.soul.goals && extra.soul.goals.length > 0 && <div className="inspector-row"><span className="inspector-label">목표</span><span className="inspector-value">{extra.soul.goals.join(", ")}</span></div>}
+          {extra.soul.tone && <div className="inspector-row"><span className="inspector-label">Tone</span><span className="inspector-value">{extra.soul.tone}</span></div>}
+          {extra.soul.values && extra.soul.values.length > 0 && <div className="inspector-row"><span className="inspector-label">Values</span><span className="inspector-value">{extra.soul.values.join(", ")}</span></div>}
+          {extra.soul.goals && extra.soul.goals.length > 0 && <div className="inspector-row"><span className="inspector-label">Goals</span><span className="inspector-value">{extra.soul.goals.join(", ")}</span></div>}
         </div>
       )}
 
@@ -356,11 +376,11 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
         <div className="inspector-section">
           <div className="inspector-section-title">Thought</div>
           {extra.thought.priority && <div style={{ fontSize: 11, marginBottom: 4 }}>{extra.thought.priority}</div>}
-          {extra.thought.emotion && <div className="inspector-row"><span className="inspector-label">감정</span><span className="inspector-value">{extra.thought.emotion}</span></div>}
-          {extra.thought.nextIntent && <div className="inspector-row"><span className="inspector-label">다음</span><span className="inspector-value">{extra.thought.nextIntent}</span></div>}
+          {extra.thought.emotion && <div className="inspector-row"><span className="inspector-label">Emotion</span><span className="inspector-value">{extra.thought.emotion}</span></div>}
+          {extra.thought.nextIntent && <div className="inspector-row"><span className="inspector-label">Next</span><span className="inspector-value">{extra.thought.nextIntent}</span></div>}
           {extra.thought.recentEvents && extra.thought.recentEvents.length > 0 && (
             <div style={{ marginTop: 4 }}>
-              <div style={{ fontSize: 10, color: "var(--text2)", marginBottom: 2 }}>최근 기억 (위 = 새 것, 아래 = 오래됨)</div>
+              <div style={{ fontSize: 10, color: "var(--text2)", marginBottom: 2 }}>Recent memories (top = newest, bottom = older)</div>
               {extra.thought.recentEvents.slice(-8).reverse().map((e, i) => (
                 <div key={i} style={{ fontSize: 10, color: "var(--text)", padding: "1px 0", lineHeight: 1.4 }}>· {e}</div>
               ))}
@@ -376,21 +396,21 @@ function ActorInspector({ entity, onAction }: { entity: Extract<SelectedEntity, 
             const w = (window as unknown as { __wiwBridge?: { focusActor?: (id: string) => void } });
             w.__wiwBridge?.focusActor?.(a.id);
           }}
-        >📷 보기</button>
+        >📷 View</button>
         <button
           className="inspector-btn"
           onClick={() => {
-            sendMessage({ kind: "action", payload: { actorId: a.id, action: { type: "SPEAK", message: "안녕!" } } });
-            onAction(`${a.name} 발화`);
+            sendMessage({ kind: "action", payload: { actorId: a.id, action: { type: "SPEAK", message: "Hi!" } } });
+            onAction(`${a.name} spoke`);
           }}
-        >발화</button>
+        >Speak</button>
         <button
           className="inspector-btn"
           onClick={() => {
             sendMessage({ kind: "action", payload: { actorId: a.id, action: { type: "USE" } } });
-            onAction(`${a.name} 사용`);
+            onAction(`${a.name} used`);
           }}
-        >사용</button>
+        >Use</button>
       </div>
     </div>
   );
@@ -523,16 +543,16 @@ function ActorStatusCard({
     >
       <div className="actor-card-header">
         <span className="actor-dot" style={{ background: kindColor }} />
-        <span className="actor-card-name">{actor.name}</span>
+        <span className="actor-card-name">{displayActorName(actor)}</span>
         <span className={`actor-kind-badge ${actor.kind}`}>{actor.kind}</span>
         <span className="actor-pos">({actor.x},{actor.y})</span>
       </div>
       {(() => {
         const cues: string[] = [];
-        if (actor.hunger >= 80) cues.push("🍞굶주림");
-        else if (actor.hunger >= 50) cues.push("🍞배고픔");
-        if (actor.hp <= actor.maxHp * 0.3) cues.push("🩸부상");
-        if (actor.stamina <= 20) cues.push("💤탈진");
+        if (actor.hunger >= 80) cues.push("🍞starving");
+        else if (actor.hunger >= 50) cues.push("🍞hungry");
+        if (actor.hp <= actor.maxHp * 0.3) cues.push("🩸wounded");
+        if (actor.stamina <= 20) cues.push("💤exhausted");
         return cues.length ? (
           <div style={{ fontSize: 10, color: "#e94560", padding: "2px 4px 0" }}>{cues.join(" · ")}</div>
         ) : null;
@@ -581,7 +601,7 @@ function PlayerHUD({ world }: { world: WorldState | null }) {
   const player = world.actors["player-1"];
   if (!player || !player.alive) return (
     <div className="player-hud">
-      <span style={{ color: "var(--stop)", fontSize: 11 }}>⚠ 플레이어 사망 — STOP 눌러 리셋</span>
+      <span style={{ color: "var(--stop)", fontSize: 11 }}>⚠ Player died — press STOP to reset</span>
     </div>
   );
 
@@ -621,7 +641,7 @@ function PlayerHUD({ world }: { world: WorldState | null }) {
         <span className="hud-val">{player.hunger.toFixed(0)}</span>
       </div>
       <div className="hud-gold">💰 {player.gold}</div>
-      <div className="hud-keys">WASD/↑↓←→: 이동 &nbsp;|&nbsp; Space/Z: 공격</div>
+      <div className="hud-keys">WASD/↑↓←→: Move &nbsp;|&nbsp; Space/Z: Attack</div>
     </div>
   );
 }
@@ -636,8 +656,8 @@ function QuickSpawn({ onLog, cell }: { onLog: (msg: string) => void; cell: { x: 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind, name, x: cell.x, y: cell.y, assetKey }),
     })
-      .then(() => onLog(`스폰 완료: ${name}`))
-      .catch(() => onLog("스폰 실패"));
+      .then(() => onLog(`Spawned: ${name}`))
+      .catch(() => onLog("Spawn failed"));
   };
 
   const spawnItem = () => {
@@ -646,20 +666,20 @@ function QuickSpawn({ onLog, cell }: { onLog: (msg: string) => void; cell: { x: 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "food", x: cell.x, y: cell.y, iconKey: "item.food.carrot" }),
     })
-      .then(() => onLog("아이템 스폰 완료"))
-      .catch(() => onLog("아이템 스폰 실패"));
+      .then(() => onLog("Item spawned"))
+      .catch(() => onLog("Items Spawn failed"));
   };
 
   return (
     <div className="spawn-panel">
-      <div className="inspector-section-title" style={{ marginBottom: 6 }}>빠른 배치</div>
-      <div className="selected-cell-chip">선택된 셀: ({cell.x},{cell.y})</div>
+      <div className="inspector-section-title" style={{ marginBottom: 6 }}>Quick place</div>
+      <div className="selected-cell-chip">Selected cell: ({cell.x},{cell.y})</div>
       <div className="spawn-row">
         <input
           className="spawn-input"
           value={names.npc}
           onChange={(e) => setNames((p) => ({ ...p, npc: e.target.value }))}
-          placeholder="NPC 이름"
+          placeholder="NPC name"
         />
         <button className="spawn-btn" onClick={() => spawnActor("npc", names.npc, "human.default")}>
           👤 NPC
@@ -670,29 +690,29 @@ function QuickSpawn({ onLog, cell }: { onLog: (msg: string) => void; cell: { x: 
           className="spawn-input"
           value={names.animal}
           onChange={(e) => setNames((p) => ({ ...p, animal: e.target.value }))}
-          placeholder="동물 이름"
+          placeholder="Animal name"
         />
         <button className="spawn-btn" onClick={() => spawnActor("monster", names.animal, "animal.bear")}>
-          🐻 동물
+          🐻 Animal
         </button>
       </div>
       <div className="spawn-row">
-        <button className="spawn-btn" style={{ flex: 1 }} onClick={spawnItem}>💎 아이템 드랍</button>
+        <button className="spawn-btn" style={{ flex: 1 }} onClick={spawnItem}>💎 Drop item</button>
         <button
           className="spawn-btn"
           style={{ flex: 1 }}
           onClick={() => {
             sendMessage({ kind: "edit", payload: { type: "PLACE_STRUCTURE", structureType: "chest", x: cell.x, y: cell.y, width: 1, height: 1, assetKey: "object.chest" } });
-            onLog("상자 배치");
+            onLog("Place chest");
           }}
-        >📦 상자</button>
+        >📦 Chest</button>
       </div>
     </div>
   );
 }
 
 // ── Main App ──────────────────────────────────────────────────────
-export const App = () => {
+export const App = ({ onSwitchMode }: { onSwitchMode?: () => void } = {}) => {
   const gameRef   = useRef<HTMLDivElement | null>(null);
   const bridgeRef = useRef<GameBridge | null>(null);
   const logsRef   = useRef<HTMLDivElement | null>(null);
@@ -710,14 +730,36 @@ export const App = () => {
   const [tick,           setTick]            = useState(0);
   const [assetSearch,    setAssetSearch]     = useState("");
   const [selectedCell,    setSelectedCell]    = useState({ x: 24, y: 16 });
+  const [brainEnabled,   setBrainEnabled]    = useState(false);
   const eventFeed = useEventFeed(80);
+
+  // Brain status pull
+  useEffect(() => {
+    let cancel = false;
+    const pull = () => fetch(`${API_BASE}/config/brain`)
+      .then((r) => r.json())
+      .then((j: { config: { enabled: boolean } }) => { if (!cancel) setBrainEnabled(Boolean(j.config?.enabled)); })
+      .catch(() => {});
+    pull();
+    const id = setInterval(pull, 5000);
+    return () => { cancel = true; clearInterval(id); };
+  }, []);
+
+  const toggleBrain = useCallback(() => {
+    if (!isAdmin()) return;
+    const next = !brainEnabled;
+    adminFetch(`${API_BASE}/config/brain`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: next }) })
+      .then((r) => r.json())
+      .then((j: { config: { enabled: boolean } }) => setBrainEnabled(Boolean(j.config?.enabled)))
+      .catch(() => {});
+  }, [brainEnabled]);
 
   const addLog = useCallback((msg: string, kind: LogLine["kind"] = "info") => {
     const time = new Date().toLocaleTimeString("ko-KR", { hour12: false });
     setLogs((prev) => [...prev.slice(-80), { time, msg, kind }]);
   }, []);
 
-  // ── 월드 상태 업데이트 헬퍼 ───────────────────────────────────
+  // ── 월드 Status 업데이트 헬퍼 ───────────────────────────────────
   const applyWorldSnap = useCallback((snap: WorldState) => {
     setWorld(snap);
     setTick(snap.tick);
@@ -740,11 +782,11 @@ export const App = () => {
       .then((r) => r.json())
       .then((snap: WorldState) => {
         applyWorldSnap(snap);
-        addLog(`초기 월드 로드 완료 (액터: ${Object.keys(snap.actors).length})`, "info");
+        addLog(`Initial world loaded (actors: ${Object.keys(snap.actors).length})`, "info");
       })
-      .catch(() => addLog("초기 월드 로드 실패", "warn" as LogLine["kind"]));
+      .catch(() => addLog("Initial world load failed", "warn" as LogLine["kind"]));
 
-    // ── HTTP 폴링: 1초마다 서버 상태 동기화 (Colyseus plain-object 한계 보완) ──
+    // ── HTTP 폴링: 1초마다 서버 Status 동기화 (Colyseus plain-object 한계 보완) ──
     const pollInterval = setInterval(() => {
       fetch(`${BASE_URL}/world`)
         .then((r) => r.json())
@@ -755,7 +797,7 @@ export const App = () => {
     joinWorld()
       .then((room) => {
         setStatus("connected");
-        addLog("서버 연결 완료", "success");
+        addLog("Server connected", "success");
         room.onStateChange((state) => {
           try {
             const snap = JSON.parse(JSON.stringify(state)) as WorldState;
@@ -763,11 +805,11 @@ export const App = () => {
             applyWorldSnap(snap);
           } catch { /* silent */ }
         });
-        room.onMessage("result", (r: { message: string }) => addLog(`서버: ${r.message}`));
+        room.onMessage("result", (r: { message: string }) => addLog(`Server: ${r.message}`));
       })
       .catch(() => {
         setStatus("error");
-        addLog("서버 연결 실패", "error");
+        addLog("Server connection failed", "error");
       });
 
     fetch(`${BASE_URL}/assets/catalog`)
@@ -811,8 +853,8 @@ export const App = () => {
   const rescanAssets = () => {
     fetch(`${BASE_URL}/assets/rescan`, { method: "POST" })
       .then(() => fetch(`${BASE_URL}/assets/catalog`).then((r) => r.json()).then(setCatalog))
-      .then(() => addLog("에셋 재스캔 완료", "success"))
-      .catch(() => addLog("에셋 재스캔 실패", "error"));
+      .then(() => addLog("Asset rescan complete", "success"))
+      .catch(() => addLog("Asset rescan failed", "error"));
   };
 
   // ── Asset Panel Content ───────────────────────────────────────
@@ -832,7 +874,7 @@ export const App = () => {
         </div>
       ))}
       {entries.length === 0 && (
-        <div style={{ color: "var(--text3)", fontSize: 10, gridColumn: "1/-1", padding: "8px 0" }}>에셋 없음</div>
+        <div style={{ color: "var(--text3)", fontSize: 10, gridColumn: "1/-1", padding: "8px 0" }}>No assets</div>
       )}
     </div>
   );
@@ -840,7 +882,7 @@ export const App = () => {
   const searchBar = (
     <input
       type="text"
-      placeholder="검색..."
+      placeholder="Search..."
       value={assetSearch}
       onChange={(e) => setAssetSearch(e.target.value)}
       style={{
@@ -902,7 +944,7 @@ export const App = () => {
           <WorldStats world={world} />
           {selectedAsset && (selectedAsset.category === "human" || selectedAsset.category === "animal") && (
             <div className="inspector-section">
-              <div className="inspector-section-title">선택된 에셋</div>
+              <div className="inspector-section-title">Selected asset</div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <img
                   src={`${BASE_URL}${selectedAsset.path}`}
@@ -919,12 +961,12 @@ export const App = () => {
             <QuickSpawn onLog={(msg) => addLog(msg)} cell={selectedCell} />
           </div>
           <div className="inspector-empty" style={{ textAlign: "left", padding: "12px 8px" }}>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>관찰 시작하기</div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Start observing</div>
             <div style={{ fontSize: 11, color: "var(--text2)", lineHeight: 1.5 }}>
-              · 좌측 주민 카드를 클릭해 상태·생각·기억을 살펴보세요<br />
-              · 지도에서 직접 캐릭터·구조물·아이템을 클릭해도 됩니다<br />
-              · 우측 상단 <b>편집</b> 모드로 세계를 직접 수정할 수 있어요<br />
-              · 하단 <b>연대기</b>에서 마을의 큰 사건을 시간순으로 따라가 보세요
+              · Click a resident card on the left to see status, thoughts, memories<br />
+              · You can also click any character, structure, or item directly on the map<br />
+              · At the top-right <b>Edit</b> mode lets you edit the world directly<br />
+              · At the bottom <b>Chronicle</b> shows the village's big events in chronological order
             </div>
           </div>
         </>
@@ -951,9 +993,9 @@ export const App = () => {
                 onClick={() => {
                   sendMessage({ kind: "edit", payload: { type: "REMOVE_STRUCTURE", structureId: selectedEntity.id } });
                   setSelectedEntity(null);
-                  addLog(`구조물 삭제: ${selectedEntity.data.type}`);
+                  addLog(`Delete structure: ${selectedEntity.data.type}`);
                 }}
-              >삭제</button>
+              >Delete</button>
             </div>
           </>
         );
@@ -973,7 +1015,7 @@ export const App = () => {
       {/* ── Toolbar ── */}
       <div className="toolbar">
         <div className="toolbar-brand">
-          <span>🛠</span> 모찌 마을 편집
+          <span>🛠</span> Mochi Village Editor
         </div>
 
         {/* Play controls */}
@@ -981,7 +1023,7 @@ export const App = () => {
           <button
             className={`toolbar-btn play${gameMode === "PLAY" ? " active" : ""}`}
             onClick={() => setGameMode("PLAY")}
-            title="Play (WASD/방향키로 플레이어 이동)"
+            title="Play (WASD/Arrows to move)"
           >▶ PLAY</button>
           <button
             className={`toolbar-btn pause${gameMode === "PAUSE" ? " active" : ""}`}
@@ -999,7 +1041,7 @@ export const App = () => {
 
         {/* Editor tools (available in STOP/PAUSE mode) */}
         <div className="toolbar-group">
-          <span className="toolbar-label">도구</span>
+          <span className="toolbar-label">Tool</span>
           {(["SELECT", "MOVE", "TILE", "SPAWN"] as EditorTool[]).map((tool) => {
             const icons: Record<EditorTool, string> = { SELECT: "↖", MOVE: "✋", TILE: "🖌", SPAWN: "＋" };
             return (
@@ -1036,15 +1078,29 @@ export const App = () => {
           className="toolbar-btn"
           onClick={rescanAssets}
           style={{ marginLeft: 8 }}
-          title="에셋 재스캔"
-        >↺ 재스캔</button>
+          title="Rescan assets"
+        >↺ Rescan</button>
 
         <div
           className={`toolbar-status${status === "connected" ? " connected" : status === "error" ? " error" : ""}`}
         >
-          {status === "connecting" ? "● 연결중..." : status === "connected" ? "● 연결됨" : "● 연결 실패"}
+          {status === "connecting" ? "● Connecting..." : status === "connected" ? "● Connected" : "● Connection failed"}
           &nbsp;|&nbsp; Tick: {tick}
         </div>
+
+        <button
+          className={`toolbar-btn${brainEnabled ? " active" : ""}`}
+          onClick={toggleBrain}
+          title={brainEnabled ? "Brain ON (click to turn off)" : "Brain OFF (click to turn on)"}
+          style={{ color: brainEnabled ? "var(--accent)" : "var(--text3)" }}
+        >🧠 {brainEnabled ? "ON" : "OFF"}</button>
+
+        {onSwitchMode && (
+          <div className="mode-seg" style={{ marginLeft: 4 }}>
+            <button onClick={onSwitchMode} title="Switch to Observe mode">Observe</button>
+            <button className="active">Edit</button>
+          </div>
+        )}
       </div>
 
       {/* ── Workspace ── */}
@@ -1054,7 +1110,7 @@ export const App = () => {
         {gameMode === "PLAY" ? (
           <div className="panel actors-panel">
             <div className="panel-header">
-              <span className="panel-header-icon">👥</span> 주민
+              <span className="panel-header-icon">👥</span> Residents
               <span style={{ marginLeft:"auto", fontSize:10, color:"var(--text3)" }}>
                 {world ? Object.values(world.actors).filter(a=>a.alive).length : 0} alive
               </span>
@@ -1076,7 +1132,7 @@ export const App = () => {
                   />
                 )) : (
                 <div style={{ color:"var(--text3)", fontSize:11, textAlign:"center", marginTop:20 }}>
-                  서버 연결 대기중...
+                  Waiting for server connection...
                 </div>
               )}
             </div>
@@ -1084,12 +1140,12 @@ export const App = () => {
         ) : (
           <div className="panel assets-panel">
             <div className="panel-header">
-              <span className="panel-header-icon">🗂</span> 에셋
+              <span className="panel-header-icon">🗂</span> Assets
             </div>
             <div className="asset-category-tabs">
               {(["tiles", "humans", "animals", "objects", "items"] as AssetCategory[]).map((cat) => {
                 const labels: Record<AssetCategory, string> = {
-                  tiles: "타일", humans: "사람", animals: "동물", objects: "사물", items: "아이템"
+                  tiles: "Tiles", humans: "Humans", animals: "Animals", objects: "Objects", items: "Items"
                 };
                 return (
                   <button
@@ -1108,20 +1164,20 @@ export const App = () => {
         <div className="viewport-area">
           <div className="viewport-header">
             <span className={`viewport-header-badge ${modeBadgeClass}`}>{modeBadgeText}</span>
-            마을 캔버스
+            Village canvas
             {gameMode !== "PLAY" && (
               <span style={{ fontSize: 10, color: "var(--text3)" }}>
-                우클릭+드래그: 카메라이동 &nbsp;|&nbsp; 스크롤: 줌
+                Right-click drag: pan camera &nbsp;|&nbsp; Scroll: zoom
               </span>
             )}
             {gameMode === "PLAY" && (
               <span style={{ fontSize: 10, color: "var(--text3)" }}>
-                WASD/↑↓←→: 이동 &nbsp;|&nbsp; Space/Z: 공격
+                WASD/↑↓←→: Move &nbsp;|&nbsp; Space/Z: Attack
               </span>
             )}
             {world && (
               <span style={{ fontSize:10, color:"var(--text3)", marginLeft:"auto" }}>
-                선택된 셀: ({selectedCell.x},{selectedCell.y}) &nbsp;|&nbsp; Tick: {tick}
+                Selected cell: ({selectedCell.x},{selectedCell.y}) &nbsp;|&nbsp; Tick: {tick}
               </span>
             )}
           </div>
@@ -1133,12 +1189,12 @@ export const App = () => {
         {/* ── Right Panel: Inspector ── */}
         <div className="panel inspector-panel">
           <div className="panel-header">
-            <span className="panel-header-icon">🔍</span> 선택 패널
+            <span className="panel-header-icon">🔍</span> Selected
             {selectedEntity && (
               <button
                 style={{ marginLeft:"auto", background:"none", border:"none", color:"var(--text3)", cursor:"pointer", fontSize:12, padding:"0 4px" }}
                 onClick={() => setSelectedEntity(null)}
-                title="선택 해제"
+                title="Clear selection"
               >✕</button>
             )}
           </div>
@@ -1151,7 +1207,7 @@ export const App = () => {
       {/* ── Console ── */}
       <div className="console-panel">
         <div className="console-header">
-          <span>오늘의 이야기</span>
+          <span>Today's stories</span>
           <span className="console-stat">Tick: <span>{tick}</span></span>
           <span className="console-stat">Actors: <span>{world ? Object.keys(world.actors).length : 0}</span></span>
           <span className="console-stat">Structures: <span>{world ? Object.keys(world.structures).length : 0}</span></span>
@@ -1160,7 +1216,7 @@ export const App = () => {
           <button
             style={{ marginLeft: "auto", background: "none", border: "1px solid var(--border)", color: "var(--text3)", borderRadius: 3, padding: "1px 6px", cursor: "pointer", fontSize: 10 }}
             onClick={() => setLogs([])}
-          >지우기</button>
+          >Clear</button>
         </div>
         <div className="console-body" ref={logsRef}>
           {eventFeed.length > 0 ? eventFeed.map((event) => (
@@ -1175,7 +1231,7 @@ export const App = () => {
             </div>
           ))}
           {eventFeed.length === 0 && logs.length === 0 && (
-            <div style={{ color: "var(--text3)", fontSize: 11 }}>아직 기록된 이야기가 없습니다.</div>
+            <div style={{ color: "var(--text3)", fontSize: 11 }}>No stories recorded yet.</div>
           )}
         </div>
       </div>

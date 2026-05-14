@@ -18,17 +18,7 @@ export function Root() {
   };
 
   if (mode === "edit") {
-    return (
-      <div style={{ position: "relative", height: "100vh" }}>
-        <div style={{ position: "fixed", top: 8, right: 12, zIndex: 1000 }}>
-          <div className="mode-seg">
-            <button onClick={() => switchTo("observe")}>관측</button>
-            <button className="active">편집</button>
-          </div>
-        </div>
-        <EditorApp />
-      </div>
-    );
+    return <EditorApp onSwitchMode={() => switchTo("observe")} />;
   }
 
   return <ObservatoryShell onSwitchMode={() => switchTo("edit")} />;

@@ -21,3 +21,10 @@ apps/server/apps/
 .vscode/
 .idea/
 .DS_Store
+
+# secrets / env
+.env
+.env.local
+.env.*.local
+apps/server/data/brain-config.json
+

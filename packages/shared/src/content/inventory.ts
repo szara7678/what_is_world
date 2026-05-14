@@ -27,7 +27,7 @@ export const inventoryCountOf = (inv: InventorySlot[], key: string): number => {
   return total;
 };
 
-/** 인벤 슬롯 점유 수 (= 길이). 8칸 한도 등 비교용. */
+/** 인벤 슬롯 점유 수 (= 길이). 슬롯 한도 비교용. */
 export const inventorySlotsUsed = (inv: InventorySlot[]): number => inv.length;
 
 /**
@@ -36,14 +36,14 @@ export const inventorySlotsUsed = (inv: InventorySlot[]): number => inv.length;
  *
  * @param idOrKey  catalog key 또는 instance id ("wheat-7"). instance id 면 instance 슬롯 보존.
  * @param count    추가량 (stackable 만 적용. instance 는 1 강제)
- * @param slotCap  슬롯 한도 (기본 8). 초과는 rejected
+ * @param slotCap  슬롯 한도 (기본 14). 초과는 rejected
  * @returns        { added, rejected }
  */
 export function addToInventory(
   inv: InventorySlot[],
   idOrKey: string,
   count = 1,
-  slotCap = 8,
+  slotCap = 14,
   meta?: Record<string, unknown>
 ): InvAddResult {
   const key = itemKeyOf(idOrKey);
