@@ -20,6 +20,16 @@ interface ReflectionResult {
   lifeEventToRemember?: LifeEventChange;
   personaShift?: PersonaShiftChange;
   skillProgress?: SkillProgressChange[];
+  /** Optional first-person narrative line — "Lately I find myself..." or similar.
+   *  Captures how the actor sees themselves evolving from their own recent decisions.
+   *  Codex 4차 권고 (H). Free-form, evidence-gated, rate-limited to ~1/day. */
+  selfNarrative?: SelfNarrativeChange;
+}
+
+interface SelfNarrativeChange {
+  text: string;
+  evidence: string[];
+  reason?: string;
 }
 
 interface ActionLesson {
@@ -248,9 +258,11 @@ function reflectWithMock(_soul: Soul, obs: Observation[]): ReflectionResult {
 }
 
 function buildReflectionMessages(soul: Soul, obs: Observation[], mode: ReflectionMode = {}): ChatgptDirectMessage[] {
+  const identityCommon = '"identityValues": [{ "text": "0-1 rarely; newly-strengthened value name", "evidence": ["obs_id"], "reason": "one short sentence" }], "newGoal": { "text": "0-1 rare concrete goal", "evidence": ["obs_id"], "reason": "one short sentence" }, "lifeEventToRemember": { "text": "0-1 rare major event", "evidence": ["obs_id"], "importance": 0.9 }';
+  const selfNarrativeSchema = ', "selfNarrative": { "text": "0-1 first-person line starting with \"Lately I find myself...\" or \"I am becoming someone who...\" or similar — only emit if recent decisions reveal a genuine evolving sense of self, otherwise omit", "evidence": ["obs_id"], "reason": "one short sentence" }';
   const identitySchema = mode.includePersonaShift
-    ? '"identityValues": [{ "text": "0-1 rarely; newly-strengthened value name", "evidence": ["obs_id"], "reason": "one short sentence" }], "newGoal": { "text": "0-1 rare concrete goal", "evidence": ["obs_id"], "reason": "one short sentence" }, "lifeEventToRemember": { "text": "0-1 rare major event", "evidence": ["obs_id"], "importance": 0.9 }, "personaShift": { "text": "0-1 only if sleep reveals a repeated lived pattern", "evidence": ["obs_id"] }'
-    : '"identityValues": [{ "text": "0-1 rarely; newly-strengthened value name", "evidence": ["obs_id"], "reason": "one short sentence" }], "newGoal": { "text": "0-1 rare concrete goal", "evidence": ["obs_id"], "reason": "one short sentence" }, "lifeEventToRemember": { "text": "0-1 rare major event", "evidence": ["obs_id"], "importance": 0.9 }';
+    ? `${identityCommon}, "personaShift": { "text": "0-1 only if sleep reveals a repeated lived pattern", "evidence": ["obs_id"] }${selfNarrativeSchema}`
+    : `${identityCommon}${selfNarrativeSchema}`;
   const system = [
     "You are the inner narrator of a single villager pausing to look back on the day.",
     "Read the SOUL and RECENT OBSERVATIONS below and capture what this villager has newly noticed for themselves, as one JSON object.",
@@ -276,6 +288,7 @@ function buildReflectionMessages(soul: Soul, obs: Observation[], mode: Reflectio
     "- durableLessons.evidence must include at least one obs_id from the observation list above. If none fits, omit the lesson.",
     "- durableLessons.importance in 0.55~0.75.",
     "- identityValues 0-1 and rare. Use object form only: short value name, evidence, and reason.",
+    "- selfNarrative is OPTIONAL and rare. Only emit when at least two recent observations together suggest a real shift in how you see yourself (e.g., 'I am becoming the person Mira leans on', 'Lately I find myself drawn to the workbench more than the field'). Never restate seed persona or values verbatim. Omit if nothing has shifted.",
     "- Return one JSON object only, no surrounding text."
   ].join("\n");
 
@@ -357,6 +370,7 @@ function parseReflectionResult(text: string, obs: Observation[], includeSkillPro
     newGoal: normalizeIdentityGoal(parsed.newGoal, validObsIds),
     lifeEventToRemember: normalizeLifeEvent(parsed.lifeEventToRemember, validObsIds),
     personaShift: includePersonaShift ? normalizePersonaShift(parsed.personaShift, validObsIds) : undefined,
+    selfNarrative: normalizeSelfNarrative(parsed.selfNarrative, validObsIds),
     skillProgress: includeSkillProgress ? normalizeSkillProgress(parsed.skillProgress) : []
   };
 }
@@ -423,6 +437,25 @@ async function applyReflection(me: Actor, soul: Soul, r: ReflectionResult, provi
       }]);
       await writeSoul({ ...fresh, lifeEvents: nextEvents, lastLifeEventTick: world.tick, updatedAt: now });
       await appendIdentityShift(me.id, world.tick, "lifeEvent", text, lifeEvent.evidence, lifeEvent.reason);
+    }
+  }
+
+  // Codex 4차 권고 (H): selfNarrative — 자기 결정·관찰에서 LLM이 1줄로 자기 인식 갱신.
+  // evidence 2개 이상 + 1440 tick (~1일) cooldown + seed persona·values 재진술 차단.
+  const selfNarrative = normalizeSelfNarrative(r.selfNarrative, new Set());
+  if (selfNarrative && selfNarrative.evidence.length >= 2 && distinct(selfNarrative.evidence).length >= 2) {
+    const fresh = backfillIdentitySeeds(await readSoul(me.id, me.name));
+    const text = normalizeIdentityText(selfNarrative.text, 180);
+    const cooldownOk = world.tick - (fresh.lastSelfNarrativeTick ?? -Infinity) >= 1440;
+    const restatesIdentity = text ? substantivelyRestates(text, [fresh.persona, ...(fresh.values ?? []), ...((fresh.personaShifts ?? []).map((s) => s.text))]) : true;
+    if (text && cooldownOk && !restatesIdentity) {
+      await writeSoul({
+        ...fresh,
+        selfNarrative: { text, updatedAtTick: world.tick, evidence: selfNarrative.evidence },
+        lastSelfNarrativeTick: world.tick,
+        updatedAt: now
+      });
+      await appendIdentityShift(me.id, world.tick, "selfNarrative", text, selfNarrative.evidence, selfNarrative.reason);
     }
   }
 
@@ -677,6 +710,18 @@ function normalizePersonaShift(input: unknown, validObsIds: Set<string>): Person
   };
 }
 
+function normalizeSelfNarrative(input: unknown, validObsIds: Set<string>): SelfNarrativeChange | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const record = input as Partial<SelfNarrativeChange>;
+  const text = normalizeIdentityText(record.text, 180);
+  if (!text) return undefined;
+  return {
+    text,
+    evidence: normalizeEvidence(record.evidence, validObsIds, 5),
+    reason: typeof record.reason === "string" ? record.reason.trim().slice(0, 160) : undefined
+  };
+}
+
 function normalizeEvidence(input: unknown, validObsIds: Set<string>, cap: number): string[] {
   if (!Array.isArray(input)) return [];
   const requireValid = validObsIds.size > 0;
@@ -871,7 +916,7 @@ function itemKeyOfInventoryItem(item: Actor["inventory"][number]): string {
 async function appendIdentityShift(
   actorId: string,
   tick: number,
-  kind: "values" | "goals" | "lifeEvent" | "persona",
+  kind: "values" | "goals" | "lifeEvent" | "persona" | "selfNarrative",
   text: string,
   evidence: string[],
   reason?: string,

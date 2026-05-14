@@ -984,6 +984,11 @@ export function buildUserPrompt(args: {
   const personaShiftsLine = soul.personaShifts?.length
     ? `personaShifts=[${soul.personaShifts.slice(0, 2).map((shift) => shift.text).join("; ")}]`
     : null;
+  // Codex 4차 권고 H — selfNarrative: 자기 결정에서 누적된 "Lately I find myself..." 한 줄.
+  // seed persona/values와 별개로 LLM이 reflection에서 evidence 기반으로 갱신.
+  const selfNarrativeLine = soul.selfNarrative?.text
+    ? `Lately I find myself: ${soul.selfNarrative.text}`
+    : null;
   const valuesLine = `values=[${soul.values.join(", ") || "-"}]`;
   const currentPlaceSuffix = currentPlace
     ? (() => {
@@ -1035,6 +1040,7 @@ export function buildUserPrompt(args: {
     ...(backstoryLine ? [backstoryLine] : []),
     ...(lifeEventsLine ? [lifeEventsLine] : []),
     ...(personaShiftsLine ? [personaShiftsLine] : []),
+    ...(selfNarrativeLine ? [selfNarrativeLine] : []),
     valuesLine,
     ...(statsLine ? [statsLine] : []),
     ...(skillLine ? [skillLine] : []),

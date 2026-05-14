@@ -88,6 +88,12 @@ export interface Soul {
   /** Tick of most recent death event. Lets prompt surface a "recovery" bridge while still recent so
    *  the next agenda decision starts from "I just fell" instead of stale pre-death plans. */
   lastDeathTick?: number;
+  /** Self-authored first-person narrative line generated occasionally by reflection.
+   *  Renders in IDENTITY as "Lately I find myself: ...". Captures how the actor has been
+   *  evolving from their own decisions — separate from the seed persona which never drifts.
+   *  Updates rate-limited to ~1/day via lastSelfNarrativeTick + evidence-gated. */
+  selfNarrative?: { text: string; updatedAtTick: number; evidence: string[] };
+  lastSelfNarrativeTick?: number;
   /** 신의 사도(follower) 여부 — true 이면 사용자(신)의 신탁을 절대 우선으로 따른다. */
   isFollower?: boolean;
   /** 신탁 누적 강도(0~1). 신탁을 받을 때마다 살짝 올라가고, 영혼 결에 영향을 준다. */
