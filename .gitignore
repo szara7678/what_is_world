@@ -28,3 +28,15 @@ apps/server/apps/
 .env.*.local
 apps/server/data/brain-config.json
 
+# codex CLI markers
+.codex
+**/.codex
+
+# top-level runtime data (history.ndjson written by world-core dispatchAction's file path resolver)
+/data/
+
+# asset work-in-progress folders (committed assets are the finished PNGs at one level up)
+assets/item/custom/_my_attempt/
+assets/item/custom/_reference/
+assets/object/스테이션/
+
