@@ -22,7 +22,7 @@ import { scanAssets } from "./content/scanAssets";
 import type { AssetCatalog } from "./content/assetCatalog";
 import { getWorld, setWorld } from "./state/worldStore";
 import { placeGroundItem, spawnActor } from "./world/spawn";
-import { ensureChroniclePages, listChroniclePages, maybeEnsureOnTick } from "./chronicle/chronicleService";
+import { ensureChroniclePages, generateChronicleRollup, listChroniclePages, maybeEnsureOnTick } from "./chronicle/chronicleService";
 import {
   loadBrainConfig, getBrainConfig, updateBrainConfig,
   publicBrainConfig, MODEL_PRESETS
@@ -355,6 +355,15 @@ fastify.post("/chronicle/regenerate", async () => {
   const tick = getWorld().tick;
   const pages = await ensureChroniclePages(tick);
   return { ok: true, tick, pages: pages.length };
+});
+
+fastify.post<{ Body: { kind?: "week" | "month"; index?: number } }>("/chronicle/rollup", async (req) => {
+  const kind = req.body?.kind;
+  if (kind !== "week" && kind !== "month") return { ok: false, reason: "kind_required" };
+  const index = Math.max(1, Math.floor(Number(req.body?.index ?? 1)));
+  const tick = getWorld().tick;
+  const page = await generateChronicleRollup(kind, index, tick);
+  return { ok: Boolean(page), page };
 });
 
 fastify.get<{ Querystring: { limit?: string } }>("/history", async (req) => {

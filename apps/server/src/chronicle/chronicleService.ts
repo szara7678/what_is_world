@@ -17,8 +17,8 @@ const AUTH_PATH = `${process.env.HOME}/.codex/auth.json`;
 const TICKS_PER_DAY = 1440; // 2026-05-06: server tickWorld 1 tick = 1 game min, 1 day = 1440 tick
 
 export interface ChroniclePage {
-  dayId: string;          // "day-1", "day-2", ...
-  dayIndex: number;       // 1-based
+  dayId: string;          // "day-1", "day-2", ... ("week-3", "month-1" for rollups)
+  dayIndex: number;       // 1-based (week index for week pages, month index for month pages)
   startTick: number;
   endTick: number;
   generatedAt: number;
@@ -29,6 +29,8 @@ export interface ChroniclePage {
   quotes: string[];
   milestoneCount: number;
   milestones: Array<{ tick: number; kind: string; text: string; actorId?: string }>;
+  /** Rollup discriminator. Daily pages default to undefined (treated as "day"); weekly/monthly rollup pages set this explicitly. */
+  kind?: "day" | "week" | "month";
 }
 
 interface PagesFile { pages: ChroniclePage[] }
@@ -282,6 +284,80 @@ export async function ensureChroniclePages(currentTick: number, model = "gpt-5.4
   }
   if (updated) await writePages(pages);
   return pages;
+}
+
+/**
+ * Generate a rollup page summarizing a range of daily pages.
+ * kind="week" expects 7 daily pages, kind="month" expects ~30.
+ * If a rollup with the same kind+index already exists it is replaced.
+ */
+export async function generateChronicleRollup(
+  kind: "week" | "month",
+  index: number,
+  currentTick: number,
+  model = "gpt-5.4"
+): Promise<ChroniclePage | null> {
+  const pages = await readPages();
+  const daysPerUnit = kind === "week" ? 7 : 30;
+  const startDay = (index - 1) * daysPerUnit + 1;
+  const endDay = startDay + daysPerUnit - 1;
+  const dailyInRange = pages
+    .filter((p) => (p.kind ?? "day") === "day" && p.dayIndex >= startDay && p.dayIndex <= endDay)
+    .sort((a, b) => a.dayIndex - b.dayIndex);
+  if (dailyInRange.length === 0) return null;
+
+  const startTick = dailyInRange[0].startTick;
+  const endTick = dailyInRange[dailyInRange.length - 1].endTick;
+  const lines: string[] = [];
+  lines.push(`# ${kind === "week" ? "Week" : "Month"} ${index} — day pages ${dailyInRange[0].dayIndex}-${dailyInRange[dailyInRange.length - 1].dayIndex}`);
+  lines.push("");
+  for (const p of dailyInRange) {
+    lines.push(`## Day ${p.dayIndex}: ${p.title}`);
+    lines.push(p.body);
+    if (p.quotes.length) {
+      lines.push("Quotes:");
+      for (const q of p.quotes) lines.push(`- "${q}"`);
+    }
+    lines.push("");
+  }
+  lines.push(`Write a single ${kind === "week" ? "weekly" : "monthly"} reflection in English (3-5 paragraphs) that captures the arc of these ${dailyInRange.length} days. Identify recurring threads, relationship shifts, lessons that compounded, and the village's overall mood at the end of the period. Output one JSON object: {"title":"...","body":"3-5 paragraphs","quotes":["...","..."]}`);
+
+  const systemInstr = `You are the chronicler of a small village writing a ${kind}-long reflection in English. You receive a series of daily diary entries from the period. Synthesize them into a single longer reflection that names recurring threads and arcs.
+
+Rules:
+- Do not invent events not present in the input.
+- Tone: warm, grounded prose. 3-5 paragraphs.
+- title is one short phrase summarizing the period.
+- quotes are 1-3 short lines that appeared in the daily entries.
+
+Output one JSON object only:
+{"title":"...","body":"3-5 paragraph reflection","quotes":["...","..."]}`;
+
+  const raw = await callChatgptResponses(model, systemInstr, lines.join("\n"));
+  if (!raw) return null;
+  const llm = parseLlmJson(raw);
+  if (!llm) return null;
+
+  const page: ChroniclePage = {
+    dayId: `${kind}-${index}`,
+    dayIndex: index,
+    startTick,
+    endTick,
+    generatedAt: Date.now(),
+    generatedAtTick: currentTick,
+    model,
+    title: llm.title,
+    body: llm.body,
+    quotes: llm.quotes,
+    milestoneCount: dailyInRange.reduce((sum, p) => sum + p.milestoneCount, 0),
+    milestones: [],
+    kind,
+  };
+
+  const filtered = pages.filter((p) => !(p.kind === kind && p.dayIndex === index));
+  filtered.push(page);
+  await writePages(filtered);
+  return page;
 }
 
 let lastEnsureAtTick = 0;
