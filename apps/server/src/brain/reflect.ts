@@ -126,7 +126,12 @@ export function startReflectionLoop(): void {
 
 async function runOne(cfg: BrainConfig): Promise<void> {
   const world = getWorld();
-  const actors: Actor[] = Object.values(world.actors).filter((a) => a.alive);
+  // Codex 8th K-modified fairness: iterate actors least-recently-reflected first.
+  // Previous order (Object.values insertion) meant player-1 + npc-1 always won the
+  // MAX_REFLECTIONS_PER_CYCLE=2 budget; the rest hadn't reflected in a fresh ~6h run.
+  const actors: Actor[] = Object.values(world.actors)
+    .filter((a) => a.alive)
+    .sort((a, b) => (lastReflectedAt.get(a.id) ?? 0) - (lastReflectedAt.get(b.id) ?? 0));
   if (await runQueuedSleepReflection(cfg, actors)) return;
   let reflected = 0;
   for (const me of actors) {
