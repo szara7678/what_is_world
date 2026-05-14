@@ -85,6 +85,9 @@ export interface Soul {
   lastPersonaShiftTick?: number;
   /** Canonical milestone keys this actor has already achieved (first_kill, first_meeting:<id>, etc.). Prevents re-emit. */
   milestonesAchieved?: string[];
+  /** Tick of most recent death event. Lets prompt surface a "recovery" bridge while still recent so
+   *  the next agenda decision starts from "I just fell" instead of stale pre-death plans. */
+  lastDeathTick?: number;
   /** 신의 사도(follower) 여부 — true 이면 사용자(신)의 신탁을 절대 우선으로 따른다. */
   isFollower?: boolean;
   /** 신탁 누적 강도(0~1). 신탁을 받을 때마다 살짝 올라가고, 영혼 결에 영향을 준다. */

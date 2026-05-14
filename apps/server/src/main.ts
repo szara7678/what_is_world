@@ -145,6 +145,15 @@ function startServerTick(): void {
             tags: ["death", "milestone:death"],
             importance: 0.95
           });
+          // Codex 5차 권고: 사망 시 lastDeathTick 기록 → prompt가 "recover and reassess" bridge 노출.
+          void (async () => {
+            try {
+              const soul = await readSoul(actor.id, actor.name);
+              await writeSoul({ ...soul, lastDeathTick: world.tick, updatedAt: Date.now() });
+            } catch {
+              // best-effort; failed write should not interrupt tick.
+            }
+          })();
         }
       }
       knownAlive.set(actor.id, actor.alive);

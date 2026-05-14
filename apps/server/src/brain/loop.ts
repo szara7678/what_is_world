@@ -823,10 +823,13 @@ async function decideAndApply(me: Actor): Promise<void> {
       : undefined
   };
   const lastBeat = (thought.beatHistory ?? []).at(-1);
+  // dup-skip 4-key: priority + nextIntent + action.type + action.reason 모두 일치하면 같은 beat의 반복.
+  // reason이 다르면 같은 행동이라도 의미가 달라 push 허용 (character voice 누적).
   const isDuplicate = lastBeat
     && lastBeat.priority === beatEntry.priority
     && lastBeat.nextIntent === beatEntry.nextIntent
-    && (lastBeat.action?.type ?? "_") === (beatEntry.action?.type ?? "_");
+    && (lastBeat.action?.type ?? "_") === (beatEntry.action?.type ?? "_")
+    && (lastBeat.action?.reason ?? "") === (beatEntry.action?.reason ?? "");
   const nextBeatHistory = isDuplicate
     ? thought.beatHistory ?? []
     : [...(thought.beatHistory ?? []), beatEntry].slice(-6);

@@ -878,9 +878,10 @@ OUTPUT EXACTLY ONE JSON OBJECT (no other text, comments, or code blocks):
     "beliefs": ["<optional, new belief lines to update>"]
   },
   "goalDecision": { "kind": "KEEP|COMPLETE|CHANGE|ABANDON", "proposal": { ... }, "reason": "..." },
-  "action": { "type": "WAIT", "reason": "<optional one short clause: why this action now, in your own voice>" }
+  "action": { "type": "WAIT", "reason": "<one short clause in your own voice: why this, given who you are right now>" }
 }
-Most actions accept an optional "reason" — fill it briefly when the choice is non-obvious; future-you will read it back in your monologue.
+Almost always fill "reason" on non-WAIT actions. Skip only when this beat is a literal continuation of the previous one (sticky executor still running).
+Reason should reference your state, values, persona, or someone you care about — not just restate the action ("to pick up the apple" is bad; "easing hunger before the long walk home" or "saving food to share with Mira" is good).
 goalDecision field is not required every beat. Omit (=KEEP) when no change needed.
 proposal is required only when kind="CHANGE".
 
@@ -1043,6 +1044,7 @@ export function buildUserPrompt(args: {
       ? [agendaLine(soul.agenda, world.tick)]
       : ["- (forming) — your next decision can propose a focused goal via CHANGE"]),
     "",
+    ...formatRecoveryBridge(soul, world.tick),
     ...formatAgendaRecap(thought, world.tick),
     ...formatBeatTimeline(thought, world.tick),
     ...nowLines,
@@ -1086,23 +1088,56 @@ export function buildUserPrompt(args: {
 }
 
 /**
+ * Codex 5차 권고: hp=0 사망 후 다시 살아난 직후 1-2 prompt에는 기존 agenda를 그대로 따르기보다
+ * "recover and reassess" bridge가 더 자연스러움. 사망 후 RECOVERY_BRIDGE_WINDOW_TICKS 안에는 노출.
+ */
+const RECOVERY_BRIDGE_WINDOW_TICKS = 40;
+function formatRecoveryBridge(soul: Soul, nowTick: number): string[] {
+  if (typeof soul.lastDeathTick !== "number") return [];
+  const since = nowTick - soul.lastDeathTick;
+  if (since < 0 || since > RECOVERY_BRIDGE_WINDOW_TICKS) return [];
+  return [
+    "# RECOVERY",
+    `You fell ${since} ticks ago and have come back. Your prior agenda may no longer be the right one — start by recovering, looking around, and deciding what matters most now.`,
+    ""
+  ];
+}
+
+/**
  * F+G merged — Rolling beat timeline surfaces the last few "I felt X, decided Y, did Z because W → result"
  *    rows so the actor's inner-state-to-action through-line is visible in one block instead of two
  *    redundant ones. Codex 4차 권고 #1+#2 합쳐서. Free-form prose, doesn't force schema fields.
+ *    Codex 5차 권고: consecutive semantic duplicates (same priority+action.type+reason)는 한 줄로 압축
+ *    "[t-A..t-B] ... × N times" 형식. 노이즈 줄이고 진짜 변화는 부각.
  */
 function formatBeatTimeline(thought: Thought, nowTick: number): string[] {
   const history = thought.beatHistory ?? [];
   if (history.length === 0) return [];
+  type Entry = NonNullable<Thought["beatHistory"]>[number];
+  const rows = history.slice(-5);
+  const sigOf = (e: Entry) => `${e.priority}|${e.action?.type ?? "_"}|${e.action?.reason ?? ""}`;
+  const groups: Array<{ entries: Entry[]; sig: string }> = [];
+  for (const entry of rows) {
+    const sig = sigOf(entry);
+    const last = groups.at(-1);
+    if (last && last.sig === sig) last.entries.push(entry);
+    else groups.push({ entries: [entry], sig });
+  }
+
   const lines: string[] = ["# MY RECENT BEATS (what I felt, what I decided, what I did, and how it landed)"];
-  for (const entry of history.slice(-5)) {
-    const ago = Math.max(0, nowTick - entry.tick);
-    const head = `[t-${ago}] (${entry.emotion}) "${entry.priority}" → ${entry.nextIntent}`;
-    if (!entry.action) {
+  for (const group of groups) {
+    const first = group.entries[0];
+    const last = group.entries.at(-1)!;
+    const tickHead = group.entries.length === 1
+      ? `[t-${Math.max(0, nowTick - first.tick)}]`
+      : `[t-${Math.max(0, nowTick - first.tick)}..t-${Math.max(0, nowTick - last.tick)}] (×${group.entries.length})`;
+    const head = `${tickHead} (${first.emotion}) "${first.priority}" → ${first.nextIntent}`;
+    if (!first.action) {
       lines.push(`- ${head} → (no atomic action)`);
       continue;
     }
-    const reason = entry.action.reason ? ` because "${entry.action.reason}"` : "";
-    lines.push(`- ${head} → did ${entry.action.type}${reason} → ${entry.action.result}`);
+    const reason = first.action.reason ? ` because "${first.action.reason}"` : "";
+    lines.push(`- ${head} → did ${first.action.type}${reason} → ${first.action.result}`);
   }
   lines.push("");
   return lines;
