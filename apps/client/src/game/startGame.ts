@@ -699,6 +699,8 @@ class WorldScene extends Phaser.Scene {
 
     this.input.on("pointerdown", (ptr: Phaser.Input.Pointer) => {
       const startDrag = () => {
+        // 사용자 명시적 카메라 이동 시작 — player-1 follow 해제 (안 그러면 다음 프레임에 lerp 로 되돌아감).
+        this.followPlayerCamera = false;
         this.isDragging = true;
         this.dragStartX = ptr.x; this.dragStartY = ptr.y;
         this.dragCamX   = this.cameras.main.scrollX;
@@ -722,6 +724,9 @@ class WorldScene extends Phaser.Scene {
 
     this.input.on("wheel", (_p: Phaser.Input.Pointer, _gx: number, _gy: number, dY: number) => {
       const cam = this.cameras.main;
+      // 휠 줌은 cursor 기준 → followPlayerCamera 가 켜져 있으면 다음 프레임에 lerp 가
+      // scroll 을 player 위치로 되돌려서 "중앙 기준으로 줌되는" 인상을 줌. 해제.
+      this.followPlayerCamera = false;
       const wp  = cam.getWorldPoint(_p.x, _p.y);
       const nz  = Phaser.Math.Clamp(cam.zoom * (dY > 0 ? 0.88 : 1.12), 0.25, 8);
       cam.setZoom(nz);
