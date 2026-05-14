@@ -146,21 +146,26 @@ async function runOne(cfg: BrainConfig): Promise<void> {
     const soul = await readSoul(me.id, me.name);
     let result: ReflectionResult | null = null;
     let providerUsed = "mock";
+    // Codex 5/8/9차 권고 hybrid: reflectModelEveryN 마다 1번을 reflectModel 로 보냄.
+    // Reflection 카운터는 모듈 전역. 평소엔 cfg.model 사용, every-N tick에 reflectModel (예: gpt-5.5) 사용.
+    const useStrongerThisTime = pickHybridReflectModel(cfg);
+    const effectiveModel = useStrongerThisTime || cfg.model;
+    const effCfg = { ...cfg, model: effectiveModel };
     if (shouldUseLlmReflection(fresh)) {
       if (cfg.provider === "openrouter" && cfg.apiKey) {
-        result = await reflectWithLLM(cfg, soul, fresh).catch(() => null);
-        if (result) providerUsed = "openrouter";
+        result = await reflectWithLLM(effCfg, soul, fresh).catch(() => null);
+        if (result) providerUsed = `openrouter:${effectiveModel}`;
       } else if (cfg.provider === "local-proxy") {
         result = await reflectWithLLM({
-          ...cfg,
+          ...effCfg,
           baseUrl: cfg.baseUrl || LOCAL_PROXY_DEFAULTS.baseUrl,
           apiKey: cfg.apiKey || LOCAL_PROXY_DEFAULTS.apiKey,
-          model: cfg.model || LOCAL_PROXY_DEFAULTS.model
+          model: effectiveModel || LOCAL_PROXY_DEFAULTS.model
         }, soul, fresh).catch(() => null);
-        if (result) providerUsed = "local-proxy";
+        if (result) providerUsed = `local-proxy:${effectiveModel}`;
       } else if (cfg.provider === "chatgpt-direct") {
-        result = await reflectWithChatgptDirect(cfg, soul, fresh).catch(() => null);
-        if (result) providerUsed = "chatgpt-direct";
+        result = await reflectWithChatgptDirect(effCfg, soul, fresh).catch(() => null);
+        if (result) providerUsed = `chatgpt-direct:${effectiveModel}`;
       }
     }
     if (!result) result = reflectWithMock(soul, fresh);
@@ -170,6 +175,19 @@ async function runOne(cfg: BrainConfig): Promise<void> {
     lastReflectedAt.set(me.id, Date.now());
     reflected += 1;
   }
+}
+
+/**
+ * Codex hybrid: 매 N번째 reflection을 reflectModel로 격상.
+ * cfg.reflectModelEveryN === 0 또는 reflectModel 미설정 → 항상 cfg.model.
+ * 모듈 전역 counter (서버 reload 시 reset).
+ */
+let reflectCounter = 0;
+function pickHybridReflectModel(cfg: BrainConfig): string | null {
+  if (!cfg.reflectModel || !cfg.reflectModelEveryN || cfg.reflectModelEveryN <= 0) return null;
+  reflectCounter += 1;
+  if (reflectCounter % cfg.reflectModelEveryN === 0) return cfg.reflectModel;
+  return null;
 }
 
 async function runQueuedSleepReflection(cfg: BrainConfig, actors: Actor[]): Promise<boolean> {

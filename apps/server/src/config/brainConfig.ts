@@ -18,6 +18,10 @@ export interface BrainConfig {
   reflectIntervalMs: number;
   /** actor 별 모델 override. 예: { "npc-2": "gpt-5.5", "player-1": "gpt-5.4" }. 없으면 글로벌 model. */
   modelOverrides?: Record<string, string>;
+  /** Reflection 전용 모델 override. 비어있으면 cfg.model 사용. Codex 권고 hybrid: reflection 1/N을 큰 모델로. */
+  reflectModel?: string;
+  /** reflection을 reflectModel 로 보낼 빈도. 1 = 항상, 3 = 1/3, 0 또는 미설정 = 항상 cfg.model. Codex 5/8/9차 권고: 3-4가 character voice ROI 좋음. */
+  reflectModelEveryN?: number;
   /**
    * PR1: plan-driven 활성화 단계.
    *  off    — plan 무시 (현 atomic 경로만)
@@ -115,6 +119,8 @@ export const publicBrainConfig = (c: BrainConfig = current) => ({
   fallbackToMock: c.fallbackToMock,
   reflectIntervalMs: c.reflectIntervalMs,
   modelOverrides: c.modelOverrides ?? {},
+  reflectModel: c.reflectModel,
+  reflectModelEveryN: c.reflectModelEveryN,
   planMode: c.planMode ?? "off",
   hasApiKey: Boolean(c.apiKey),
   updatedAt: c.updatedAt

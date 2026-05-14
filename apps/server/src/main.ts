@@ -1053,7 +1053,8 @@ fastify.get("/config/brain", async () => ({
 fastify.post<{ Body: Partial<import("./config/brainConfig").BrainConfig> } >("/config/brain", async (req) => {
   const patch = req.body ?? {};
   const allowed: Array<keyof import("./config/brainConfig").BrainConfig> = [
-    "provider", "apiKey", "model", "baseUrl", "tickIntervalMs", "maxActorsPerTick", "enabled", "fallbackToMock", "reflectIntervalMs", "modelOverrides"
+    "provider", "apiKey", "model", "baseUrl", "tickIntervalMs", "maxActorsPerTick", "enabled", "fallbackToMock", "reflectIntervalMs", "modelOverrides",
+    "reflectModel", "reflectModelEveryN", "planMode"
   ];
   const sanitized: Partial<import("./config/brainConfig").BrainConfig> = {};
   for (const k of allowed) {
