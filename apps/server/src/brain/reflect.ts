@@ -259,7 +259,7 @@ function reflectWithMock(_soul: Soul, obs: Observation[]): ReflectionResult {
 
 function buildReflectionMessages(soul: Soul, obs: Observation[], mode: ReflectionMode = {}): ChatgptDirectMessage[] {
   const identityCommon = '"identityValues": [{ "text": "0-1 rarely; newly-strengthened value name", "evidence": ["obs_id"], "reason": "one short sentence" }], "newGoal": { "text": "0-1 rare concrete goal", "evidence": ["obs_id"], "reason": "one short sentence" }, "lifeEventToRemember": { "text": "0-1 rare major event", "evidence": ["obs_id"], "importance": 0.9 }';
-  const selfNarrativeSchema = ', "selfNarrative": { "text": "0-1 first-person line starting with \"Lately I find myself...\" or \"I am becoming someone who...\" or similar — only emit if recent decisions reveal a genuine evolving sense of self, otherwise omit", "evidence": ["obs_id"], "reason": "one short sentence" }';
+  const selfNarrativeSchema = ', "selfNarrative": { "text": "0-1 first-person line — VARY the opening across emissions instead of always using \"Lately I find myself...\". Pick whichever feels natural this beat: \"Lately I find myself...\" / \"These days I...\" / \"I\'m starting to notice...\" / \"When this keeps happening...\" / \"I seem to be becoming...\" / \"More and more I...\" / \"It strikes me that...\". Only emit if recent decisions reveal a genuine evolving sense of self, otherwise omit.", "evidence": ["obs_id"], "reason": "one short sentence" }';
   const identitySchema = mode.includePersonaShift
     ? `${identityCommon}, "personaShift": { "text": "0-1 only if sleep reveals a repeated lived pattern", "evidence": ["obs_id"] }${selfNarrativeSchema}`
     : `${identityCommon}${selfNarrativeSchema}`;
@@ -288,7 +288,7 @@ function buildReflectionMessages(soul: Soul, obs: Observation[], mode: Reflectio
     "- durableLessons.evidence must include at least one obs_id from the observation list above. If none fits, omit the lesson.",
     "- durableLessons.importance in 0.55~0.75.",
     "- identityValues 0-1 and rare. Use object form only: short value name, evidence, and reason.",
-    "- selfNarrative is OPTIONAL and rare. Only emit when at least two recent observations together suggest a real shift in how you see yourself (e.g., 'I am becoming the person Mira leans on', 'Lately I find myself drawn to the workbench more than the field'). Never restate seed persona or values verbatim. Omit if nothing has shifted.",
+    "- selfNarrative is OPTIONAL and rare. Only emit when at least two recent observations together suggest a real shift in how you see yourself (e.g., 'I am becoming the person Mira leans on', 'These days I keep choosing the steadier path over the dramatic one'). Never restate seed persona or values verbatim. Vary the opening phrase across emissions; do not start every line with 'Lately I find myself'. Omit if nothing has shifted or if it would simply refine your existing selfNarrative — return that one instead.",
     "- Return one JSON object only, no surrounding text."
   ].join("\n");
 
@@ -440,16 +440,21 @@ async function applyReflection(me: Actor, soul: Soul, r: ReflectionResult, provi
     }
   }
 
-  // Codex 4차 권고 (H) + 7차 완화: selfNarrative — 자기 결정·관찰에서 LLM이 1줄로 자기 인식 갱신.
-  // evidence 2개 + 1440 tick cooldown + seed/persona/values 재진술 차단.
-  // 7차 완화: evidence가 다양한 categories (action+memory+lesson 등)에 걸쳐 있으면 fail-only도 통과 — 단순 실패 누적도 자기 인식이 될 수 있음.
+  // Codex 4차 (H) + 7차 (gate 완화) + 8차 (K modified): selfNarrative — 자기 결정·관찰에서 LLM이 1줄.
+  // - evidence ≥ 2, rich tag (milestone/agenda/lesson/relationship_moment/death) 한 줄 이상
+  // - 점진 cooldown: 1번째 1440 / 2번째 2160 / 3+번째 2880 tick (같은 actor가 surface 독점하지 못하게)
+  // - actor 분산 gate: 같은 4-5 actor 라이브에서 다른 actor 가 selfNarrative 0건이고 ≥3000 tick 지났으면 이 actor는 defer
+  // - same-root merge: 직전 selfNarrative와 의미 같으면 update 대신 evidence 누적만
   const selfNarrative = normalizeSelfNarrative(r.selfNarrative, new Set());
   if (selfNarrative && selfNarrative.evidence.length >= 2 && distinct(selfNarrative.evidence).length >= 2) {
     const fresh = backfillIdentitySeeds(await readSoul(me.id, me.name));
     const text = normalizeIdentityText(selfNarrative.text, 180);
-    const cooldownOk = world.tick - (fresh.lastSelfNarrativeTick ?? -Infinity) >= 1440;
+    // 점진 cooldown — emit 수에 따라 backs off geometrically.
+    // 1st→2nd: 1440 (1 day) / 2nd→3rd: 2160 / 3rd→4th: 4320 / 4th+: 8640.
+    const ownEmitCount = recentSelfNarrativeEmits(me.id).length;
+    const requiredCooldown = ownEmitCount === 0 ? 1440 : ownEmitCount === 1 ? 2160 : ownEmitCount === 2 ? 4320 : 8640;
+    const cooldownOk = world.tick - (fresh.lastSelfNarrativeTick ?? -Infinity) >= requiredCooldown;
     const restatesIdentity = text ? substantivelyRestates(text, [fresh.persona, ...(fresh.values ?? []), ...((fresh.personaShifts ?? []).map((s) => s.text))]) : true;
-    // 추가 게이트 완화: evidence 중 하나 이상이 lifeEvent / agenda lifecycle / relationship_moment / milestone tag 면 통과 (단순 실패 외)
     const evidenceInfo = await readEvidenceTagInfo(me.id, selfNarrative.evidence);
     const hasRichEvidence = evidenceInfo.some((obs) =>
       obs.tags.some((tag) =>
@@ -458,14 +463,29 @@ async function applyReflection(me: Actor, soul: Soul, r: ReflectionResult, provi
         tag === "relationship_moment" || tag === "lesson" || tag === "death"
       )
     );
-    if (text && cooldownOk && !restatesIdentity && hasRichEvidence) {
-      await writeSoul({
-        ...fresh,
-        selfNarrative: { text, updatedAtTick: world.tick, evidence: selfNarrative.evidence },
-        lastSelfNarrativeTick: world.tick,
-        updatedAt: now
-      });
-      await appendIdentityShift(me.id, world.tick, "selfNarrative", text, selfNarrative.evidence, selfNarrative.reason);
+    // Actor 분산 gate: 이 actor ≥ 2 emits + 살아있는 다른 villager 중 0건이면 defer.
+    const distributionDefer = shouldDeferForDistribution(me.id, ownEmitCount);
+    // Same-root merge: 직전 selfNarrative와 의미 같으면 (substantivelyRestates) update X — evidence만 누적.
+    const refinesPrior = fresh.selfNarrative?.text && substantivelyRestates(text ?? "", [fresh.selfNarrative.text]);
+    if (text && cooldownOk && !restatesIdentity && hasRichEvidence && !distributionDefer) {
+      if (refinesPrior) {
+        // merge evidence, keep prior text, do not bump lastSelfNarrativeTick (avoid stealing slot)
+        const mergedEvidence = Array.from(new Set([...(fresh.selfNarrative?.evidence ?? []), ...selfNarrative.evidence])).slice(0, 8);
+        await writeSoul({
+          ...fresh,
+          selfNarrative: { text: fresh.selfNarrative!.text, updatedAtTick: fresh.selfNarrative!.updatedAtTick, evidence: mergedEvidence },
+          updatedAt: now
+        });
+      } else {
+        await writeSoul({
+          ...fresh,
+          selfNarrative: { text, updatedAtTick: world.tick, evidence: selfNarrative.evidence },
+          lastSelfNarrativeTick: world.tick,
+          updatedAt: now
+        });
+        recordSelfNarrativeEmit(me.id, world.tick);
+        await appendIdentityShift(me.id, world.tick, "selfNarrative", text, selfNarrative.evidence, selfNarrative.reason);
+      }
     }
   }
 
@@ -921,6 +941,34 @@ function isGoalGrounded(text: string, actor: Actor, soul: Soul, world: ReturnTyp
 
 function itemKeyOfInventoryItem(item: Actor["inventory"][number]): string {
   return item.item;
+}
+
+// Codex 8차 K modified: selfNarrative actor 분산 트래커.
+// 같은 actor 가 surface 독점하지 않도록 emit 시각을 actor 별로 기록.
+const selfNarrativeEmits = new Map<string, number[]>();
+function recentSelfNarrativeEmits(actorId: string): number[] {
+  return selfNarrativeEmits.get(actorId) ?? [];
+}
+function recordSelfNarrativeEmit(actorId: string, tick: number): void {
+  const arr = selfNarrativeEmits.get(actorId) ?? [];
+  arr.push(tick);
+  while (arr.length > 8) arr.shift();
+  selfNarrativeEmits.set(actorId, arr);
+}
+/**
+ * Defer 조건: 이 actor 가 emit 2+ 이고, 다른 살아있는 villager (npc-*, player-1) 중 한 명도 emit 안 했으면 defer.
+ * → 조용한 actor 에게 surface slot 양보. world.actors 직접 조회.
+ */
+function shouldDeferForDistribution(actorId: string, ownEmitCount: number): boolean {
+  if (ownEmitCount < 2) return false;
+  const world = getWorld();
+  const otherSilent = Object.values(world.actors).filter((a) =>
+    a.id !== actorId &&
+    a.alive &&
+    (a.id.startsWith("npc-") || a.id === "player-1") &&
+    (selfNarrativeEmits.get(a.id) ?? []).length === 0
+  );
+  return otherSilent.length > 0;
 }
 
 async function appendIdentityShift(
