@@ -468,6 +468,9 @@ class WorldScene extends Phaser.Scene {
     }
 
     this.cameras.main.setBackgroundColor(0xf3ead9);
+    // 카메라 origin 을 (0,0) 으로 명시 → setZoom 이 viewport 좌상단 기준으로 작동하고
+    // scrollX/scrollY 가 viewport 좌상단의 world coord 가 됨. 휠 줌 cursor 산수가 깨끗해짐.
+    this.cameras.main.setOrigin(0, 0);
     this.log("게임 씬 준비됨");
   }
 
