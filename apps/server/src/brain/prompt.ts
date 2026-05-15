@@ -127,6 +127,13 @@ function resourcePressureLine(world: WorldState): string {
   const parts = [`time ${world.timeOfDay.toFixed(1)}h`, `weather ${weatherLine(world)}`];
   if (shortages.length) parts.push(`shortage: ${shortages.join(", ")}`);
   if (world.context.activeIssue) parts.push(`event: ${world.context.activeIssue.text}`);
+  // Spec stage 1: 작물 황금기 — NOW 라인에 한 줄로 노출. yieldMul, crops 표시.
+  const hs = world.context.harvestSeason;
+  if (hs?.crops?.length) {
+    const cropStr = hs.crops.join("/");
+    const remaining = Math.max(0, hs.untilTick - world.tick);
+    parts.push(`harvest season: ${cropStr} yields are ${hs.mood} (+${Math.round((hs.yieldMul - 1) * 100)}%, ${remaining}t left)`);
+  }
   return parts.join(" / ");
 }
 

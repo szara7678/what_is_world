@@ -14,6 +14,16 @@ export interface WorldContext {
   nextTravelerArrivalDay?: number;
   travelerActorId?: string;
   travelerUntilDay?: number;
+  /** Spec stage 1: 작물 황금기. 매 day 새벽에 8-12% 확률 발동, duration 2-3일, cooldown 5+일.
+   *  yieldMul (기본 1.5) 이 gather 결과 수량에 곱함. 종료 시 observation 으로 흐르고 broadcast X. */
+  harvestSeason?: {
+    crops: string[];          // ["wheat"] / ["apple", "berry"]
+    yieldMul: number;         // 1.5 권장
+    startedAtTick: number;
+    untilTick: number;
+    nextEarliestTick: number; // cooldown 종료 시각 (다음 발동 가능 시각)
+    mood: "abundant" | "bountiful";
+  };
   resources: {
     carrotStock: number;
     wellWaterLevel: number;

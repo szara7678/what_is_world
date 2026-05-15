@@ -1,4 +1,4 @@
-import { inventoryCountOf, inventorySlotsUsed, itemKeyOf, itemMaxStack, itemStackable, type Actor, type GroundItem, type Place, type Structure, type WorldState } from "@wiw/shared";
+import { addToInventory, inventoryCountOf, inventorySlotsUsed, itemKeyOf, itemMaxStack, itemStackable, type Actor, type GroundItem, type Place, type Structure, type WorldState } from "@wiw/shared";
 import { cleanupPendingTrades } from "../economy/pendingTrade";
 import { tickWorldContext, fruitTreeRegen } from "./tickWorldContext";
 import { actorNearStructure, dispatchAction, maturateCrops, tickAutoAttack, tickSleep, armorMaxHpBonus } from "../actions/dispatchAction";
@@ -515,6 +515,23 @@ type PendingUse = NonNullable<Actor["pendingUse"]>;
 const GATHER_DEFAULT_RADIUS = 12;
 const PENDING_USE_TIMEOUT_TICKS = 100;
 
+/**
+ * Spec stage 1: 작물 황금기 — gather 성공 후 crop 매치 시 확률적 +1 inventory.
+ * yieldMul - 1 만큼 확률. 1.5 → 50% 추가 획득. 1.0 → bonus 없음.
+ * itemKeyOf 로 정규화 매칭 (apple-xyz → apple). harvest season crop과 정확히 같으면 trigger.
+ */
+const applyHarvestSeasonBonus = (world: WorldState, actor: Actor, itemPrefix: string): void => {
+  const season = world.context?.harvestSeason;
+  if (!season || !season.crops?.length) return;
+  const matchKey = itemKeyOf(itemPrefix);
+  if (!season.crops.includes(matchKey)) return;
+  const bonusChance = Math.max(0, season.yieldMul - 1);
+  if (Math.random() >= bonusChance) return;
+  // bonus add (best-effort — inventory full 이면 silent skip).
+  addToInventory(actor.inventory, matchKey, 1, 14);
+  world.revision += 1;
+};
+
 const pushGatherEvent = (
   world: WorldState,
   actor: Actor,
@@ -770,6 +787,9 @@ const runAutoGather = (world: WorldState, actor: Actor): boolean => {
       clearGatherClaim(world, actor, step);
       if (result.ok) {
         step.collected += 1;
+        // Spec stage 1: 작물 황금기 bonus — crop 매치 시 확률적 +1 inventory.
+        // yieldMul 1.5 → 50% 확률로 한 번 더 얻음.
+        applyHarvestSeasonBonus(world, actor, step.item);
         pushGatherEvent(world, actor, "gather:progress", step, step.collected);
         if (step.collected >= step.count) {
           pushGatherEvent(world, actor, "gather:done", step, step.collected);
@@ -803,6 +823,10 @@ const runAutoGather = (world: WorldState, actor: Actor): boolean => {
       if (dist <= Math.max(struct.width, struct.height)) {
         const result = dispatchAction(world, { actorId: actor.id, action: { type: "USE", objectId: struct.id } });
         clearGatherClaim(world, actor, step);
+        if (result.ok) {
+          // Spec stage 1: structure gather (tree→wood, rock→ore 등) 도 황금기 crop 매치 시 bonus.
+          applyHarvestSeasonBonus(world, actor, step.item);
+        }
         if (!result.ok) {
           const reason = result.message === "axe_required"
             ? "repair:inventory_short:axe 0/1"

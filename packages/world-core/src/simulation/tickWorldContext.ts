@@ -338,5 +338,30 @@ export const tickWorldContext = (world: WorldState): void => {
       text: ISSUE_TEXT[kind]
     };
   }
+
+  // Spec stage 1: 작물 황금기 scheduler — 매 새 day 새벽에 cooldown 지났으면 ~10% 확률 발동.
+  // duration 2-3일, yieldMul 1.5, cooldown 5일. 1개 crop 만 선택.
+  // earliest 는 종료 직전 nextEarliestTick 을 기억해야 새 발동 차단됨 → 캐시.
+  let earliestStartTick = context.harvestSeason?.nextEarliestTick ?? 0;
+  if (context.harvestSeason && world.tick >= context.harvestSeason.untilTick) {
+    earliestStartTick = context.harvestSeason.nextEarliestTick;
+    context.harvestSeason = undefined;
+    world.revision += 1;
+  }
+  if (!context.harvestSeason && world.tick >= earliestStartTick && Math.random() < 0.10) {
+    const cropPool = ["wheat", "apple", "berry", "mushroom"];
+    const crop = cropPool[Math.floor(Math.random() * cropPool.length)];
+    const durationDays = 2 + Math.floor(Math.random() * 2); // 2-3 days
+    const cooldownDays = 5;
+    context.harvestSeason = {
+      crops: [crop],
+      yieldMul: 1.5,
+      startedAtTick: world.tick,
+      untilTick: world.tick + DAY_TICKS * durationDays,
+      nextEarliestTick: world.tick + DAY_TICKS * (durationDays + cooldownDays),
+      mood: Math.random() < 0.3 ? "bountiful" : "abundant"
+    };
+    world.revision += 1;
+  }
   world.revision += 1;
 };
