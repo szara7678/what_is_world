@@ -31,6 +31,41 @@ let rr = 0; // round-robin pointer
 const inflightActor = new Set<string>();
 const invalidActionByActor = new Map<string, { reason: string; options: string[] }>();
 const lastDecisionsByActor = new Map<string, RecentDecision[]>();
+
+// ── Codex v11 B: failure-recovery escalation ────────────────────────────────
+// 평시 mini, 같은 actor 가 같은 recoverable failure 를 2회/120tick 밟으면 다음 1 decision 만 큰모델.
+// actor cooldown 300 tick, global cap 10%. Soul 에 안 넣음 (정체성/운영 데이터 분리, runtime Map).
+const RECOVERABLE_FAILURE_RE = /^(invalid_trade_id|trade_not_for_actor|trade_not_found|missing_want|missing_offer|pending_use_timeout|craft_inputs_short|use_inventory_missing|item_not_found)/;
+const failureStreaks = new Map<string, Array<{ tick: number; sig: string }>>();
+const lastEscalationTick = new Map<string, number>();
+let escalationCount = 0;
+let totalLlmDecisions = 0;
+
+function normalizeFailureSig(resultMsg: string): string | null {
+  if (!resultMsg) return null;
+  const m = resultMsg.match(RECOVERABLE_FAILURE_RE);
+  return m ? m[1] : null;
+}
+function recordFailureForEscalation(actorId: string, tick: number, resultOk: boolean, resultMsg: string): void {
+  if (resultOk) {
+    // 성공/다른 path 전환 시 streak 끊음 (recovery 성공).
+    failureStreaks.delete(actorId);
+    return;
+  }
+  const sig = normalizeFailureSig(resultMsg);
+  if (!sig) return;
+  const arr = (failureStreaks.get(actorId) ?? []).filter((e) => tick - e.tick <= 120);
+  arr.push({ tick, sig });
+  failureStreaks.set(actorId, arr.slice(-8));
+}
+function shouldEscalateDecision(actorId: string, tick: number): boolean {
+  if (totalLlmDecisions > 20 && escalationCount / totalLlmDecisions >= 0.10) return false; // global hard cap 10%
+  if (tick - (lastEscalationTick.get(actorId) ?? -Infinity) < 300) return false;           // actor cooldown 300t
+  const arr = (failureStreaks.get(actorId) ?? []).filter((e) => tick - e.tick <= 120);
+  const counts = new Map<string, number>();
+  for (const e of arr) counts.set(e.sig, (counts.get(e.sig) ?? 0) + 1);
+  return [...counts.values()].some((c) => c >= 2);
+}
 /** P0-2: 같은 (actor, sig) recovery_hint 30tick 내 1회만. 부정 강화 차단. */
 const recoveryHintLast = new Map<string, number>();
 /** P2: 같은 (actor, sig) 누적 카운트. 3회 도달 시 next-action hint 한 번 승격. */
@@ -498,11 +533,21 @@ async function decideAndApply(me: Actor): Promise<void> {
     llmFailed = !decision;
   } else if (cfg.provider === "chatgpt-direct") {
     // actor 별 model override (각 NPC 다른 모델로 살아있는 A/B)
-    const actorModel = cfg.modelOverrides?.[me.id] ?? cfg.model;
+    let actorModel = cfg.modelOverrides?.[me.id] ?? cfg.model;
+    // Codex v11 B: failure-recovery escalation — 막힌 actor 가 같은 실패 반복 시 1 beat 만 큰모델.
+    let escalated = false;
+    if (cfg.reflectModel && shouldEscalateDecision(me.id, world.tick)) {
+      actorModel = cfg.reflectModel;
+      escalated = true;
+      escalationCount += 1;
+      lastEscalationTick.set(me.id, world.tick);
+      failureStreaks.delete(me.id); // escalate 1회 소비 — streak 리셋
+    }
+    totalLlmDecisions += 1;
     const actorCfg = actorModel === cfg.model ? cfg : { ...cfg, model: actorModel };
     decision = await decideWithChatgptDirect(actorCfg, { world, me, soul, thought, memories, invalidAction, lastDecisions, trustByActor, relationships: allRels });
     llmFailed = !decision;
-    providerUsed = `chatgpt-direct/${actorModel}`;
+    providerUsed = `chatgpt-direct/${actorModel}${escalated ? "/recovery" : ""}`;
   } else {
     llmFailed = true;
   }
@@ -798,6 +843,7 @@ async function decideAndApply(me: Actor): Promise<void> {
     }
   }
   rememberDecision(me.id, { type: decision.action.type, result: resultMsg });
+  recordFailureForEscalation(me.id, world.tick, resultOk && !resultPending, resultMsg);
   await recordActionSignature(me, decision, beforeSnap, resultOk && !resultPending, world);
   await applyGoalDecision(me, soul, world, decision, resultOk && !resultPending, resultMsg);
   await maybeSettleAgendaFromOutcome(me, soul, world, decision, resultOk && !resultPending);
@@ -1234,6 +1280,13 @@ async function coerceInvalidTradeIdToWait(
     result: "info",
     reason: "invalid_trade_id",
     payload: { provider: providerUsed, action: decision.action, tradeId }
+  });
+  // Codex v11 A2: invalid_trade_id 를 조용히 WAIT 으로 흡수하지 말고 recovery blocker 로 연결.
+  // 안 그러면 actor prompt 에 "이전 시도 실패" 가 아니라 "기다림" 으로 남아 Lia/Mira WAIT 루프 발생.
+  me.recentBlockers = [...(me.recentBlockers ?? []), { tick: world.tick, reason: `invalid_trade_id:${tradeId ?? "?"}` }].slice(-5);
+  invalidActionByActor.set(me.id, {
+    reason: `${actionType} failed: trade ${tradeId ?? "?"} is no longer valid (expired, not addressed to you, or already resolved)`,
+    options: invalidRecoveryOptions(actionType, "invalid_trade_id")
   });
   decision.action = { type: "WAIT", reason: "invalid_trade_id" };
 }
@@ -2801,6 +2854,10 @@ function rememberDecision(actorId: string, decision: RecentDecision): void {
 }
 
 function invalidRecoveryOptions(type: BrainDecision["action"]["type"], resultMsg: string): string[] {
+  if (resultMsg === "invalid_trade_id") {
+    // 만료/잘못된 trade 재시도 금지 — 새 협상이나 다른 행동으로.
+    return ["SPEAK", "OFFER_TRADE", "MOVE", "GATHER", "OPTIONS"];
+  }
   if ((type === "USE" || type === "GIVE") && resultMsg === "item_not_in_inventory") {
     return ["INVENTORY", "PICKUP", "MOVE", "OPTIONS"];
   }

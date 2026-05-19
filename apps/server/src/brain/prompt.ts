@@ -1,6 +1,15 @@
 import type { Actor, Observation, Place, Soul, Structure, Thought, WorldState } from "@wiw/shared";
-import { nextThreshold, en, itemsByCategory, STATION_TYPES, itemDef } from "@wiw/shared";
+import { nextThreshold, en, itemsByCategory, STATION_TYPES, itemDef, itemKeyOf } from "@wiw/shared";
 import { inventoryCountOf } from "@wiw/shared";
+
+/** Codex v11 A3: harvest season 활성 + 이 resource 가 season crop 이면 LOCAL ACTIONS 에 직접 보너스 표기.
+ *  NOW 한 줄만으로는 LLM 이 GATHER 를 더 매력적으로 못 느낌 → affordance line 에 직접 노출. */
+function harvestSeasonTag(world: WorldState, resource: string): string {
+  const hs = world.context?.harvestSeason;
+  if (!hs?.crops?.length) return "";
+  if (!hs.crops.includes(itemKeyOf(resource))) return "";
+  return ` [harvest season: +${Math.round((hs.yieldMul - 1) * 100)}% yield, ${hs.mood}]`;
+}
 import { tradePairCooldownLeft, RECIPES, describeItemTiered, describeStructureTiered, isHostileCreature } from "@wiw/world-core";
 
 export interface BrainAction {
@@ -282,7 +291,7 @@ function formatLocalActions(world: WorldState, me: Actor): LocalActionContext {
     lines.push({
       dist,
       priority: 0,
-      text: `- itemId=${g.id} at (${g.x},${g.y}) dist=${dist}${flag} -> PICKUP itemId=${g.id}`
+      text: `- itemId=${g.id} at (${g.x},${g.y}) dist=${dist}${flag} -> PICKUP itemId=${g.id}${harvestSeasonTag(world, prefix)}`
     });
   }
 
@@ -296,7 +305,7 @@ function formatLocalActions(world: WorldState, me: Actor): LocalActionContext {
       lines.push({
         dist,
         priority: 1,
-        text: `- structureId=${s.id} type=${s.type} at (${x},${y}) dist=${dist} -> GATHER item=${source.resource} (requires=${source.requires ?? "none"}, have:${toolAvailable(me, source.requires) ? "yes" : "no"})`
+        text: `- structureId=${s.id} type=${s.type} at (${x},${y}) dist=${dist} -> GATHER item=${source.resource} (requires=${source.requires ?? "none"}, have:${toolAvailable(me, source.requires) ? "yes" : "no"})${harvestSeasonTag(world, source.resource)}`
       });
       continue;
     }
@@ -385,11 +394,33 @@ function formatPendingTradesBlock(world: WorldState, me: Actor): string[] {
     .sort((a, b) => a.expiresAtTick - b.expiresAtTick)
     .slice(0, 5);
   if (!trades.length) return [];
-  const lines = ["# PENDING TRADES (<=5)"];
+  // Codex v11 QW1/QW2: actor 관점으로 — 내 role, accept 가능 여부, 부족분, 다음 유효 action.
+  // acceptPendingTrade 의미: RECEIVER(to)가 trade.wants 를 지불해야 하고 PROPOSER(from)는 trade.offers 를 지불.
+  const lines = ["# PENDING TRADES (<=5) — read role/can_accept/valid_next carefully before acting"];
   for (const trade of trades) {
     const { wants, offers } = formatTradeParts(trade);
-    const speakerName = world.actors[trade.from]?.name ?? trade.from;
-    lines.push(`- [${trade.id}] from ${speakerName} wants ${wants} offers ${offers} (expires ${Math.max(0, trade.expiresAtTick - world.tick)}t)`);
+    const proposerName = world.actors[trade.from]?.name ?? trade.from;
+    const receiverName = world.actors[trade.to]?.name ?? trade.to;
+    const expires = Math.max(0, trade.expiresAtTick - world.tick);
+    if (trade.to === me.id) {
+      // 나는 receiver — trade.wants 를 내가 가져야 accept 가능.
+      const missing = trade.wants
+        .map((w) => ({ item: w.item, need: w.count, have: inventoryCountOf(me.inventory, w.item) }))
+        .filter((w) => w.have < w.need);
+      const canAccept = missing.length === 0;
+      const missingStr = missing.map((w) => `${w.item}×${w.need - w.have}`).join(", ");
+      lines.push(
+        `- [${trade.id}] ${proposerName} offers you ${offers} for your ${wants} | role=receiver `
+        + `can_accept=${canAccept ? "YES" : "NO"}${canAccept ? "" : ` (you lack ${missingStr})`} `
+        + `valid_next=${canAccept ? "ACCEPT_TRADE or REJECT_TRADE" : "REJECT_TRADE (or get the missing item first)"} (expires ${expires}t)`
+      );
+    } else {
+      // 나는 proposer — 내 offer 를 내가 ACCEPT 하면 안 됨. receiver 의 응답을 기다림.
+      lines.push(
+        `- [${trade.id}] you offered ${offers} to ${receiverName} for their ${wants} | role=proposer `
+        + `valid_next=WAIT for ${receiverName} to ACCEPT/REJECT — do NOT ACCEPT your own offer (expires ${expires}t)`
+      );
+    }
   }
   lines.push("");
   return lines;
